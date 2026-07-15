@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook Gallery</title>
+<script>
+  const saved = localStorage.getItem("gallery-theme");
+  document.documentElement.dataset.theme =
+    saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+</script>
+<link rel="stylesheet" href="/static/gallery.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Notebook Gallery</h1>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Search notebooks…" autocomplete="off">
+    <select id="sort" aria-label="Sort notebooks">
+      <option value="title">Title A–Z</option>
+      <option value="recent">Recently updated</option>
+    </select>
+    <button id="refresh" title="Rescan the notebooks directory">⟳</button>
+    <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
+  </div>
+</header>
+
+<nav id="tagbar" class="tagbar" aria-label="Filter by tag"></nav>
+
+<main>
+  <p id="empty" class="empty" hidden>No notebooks match your filters.</p>
+  <div id="grid" class="grid"></div>
+</main>
+
+<noscript>
+  <ul>
+    <!-- Plain fallback list; the grid is rendered by gallery.js -->
+  </ul>
+</noscript>
+
+<template id="card-template">
+  <article class="card">
+    <a class="thumb-link" target="_blank" rel="noopener">
+      <img class="thumb" alt="" loading="lazy">
+    </a>
+    <div class="card-body">
+      <h2 class="card-title"><a target="_blank" rel="noopener"></a></h2>
+      <p class="card-desc"></p>
+      <div class="card-tags"></div>
+    </div>
+    <div class="card-footer">
+      <span class="badge-sandbox" hidden title="Runs in an isolated environment">sandboxed</span>
+      <a class="open-btn" target="_blank" rel="noopener">Open ↗</a>
+    </div>
+  </article>
+</template>
+
+<script id="nb-data" type="application/json">{{ notebooks_json | safe }}</script>
+<script src="/static/gallery.js"></script>
+</body>
+</html>

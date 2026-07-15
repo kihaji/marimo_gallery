@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: marimo-gallery
+spec:
+  selector:
+    app: marimo-gallery
+  ports:
+    - port: 80
+      targetPort: 8000
+  # If you run more than one replica, sessions must stick to a pod:
+  # sessionAffinity: ClientIP

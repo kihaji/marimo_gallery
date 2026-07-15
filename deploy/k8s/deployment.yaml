@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marimo-gallery
+  labels:
+    app: marimo-gallery
+spec:
+  # One replica: notebook sessions are stateful subprocesses inside this pod.
+  # See deploy/k8s/README.md before raising this.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: marimo-gallery
+  template:
+    metadata:
+      labels:
+        app: marimo-gallery
+    spec:
+      containers:
+        - name: gateway
+          image: marimo-gallery:latest # replace with your registry image
+          ports:
+            - containerPort: 8000
+          env:
+            - name: GALLERY_IDLE_TTL_SECONDS
+              value: "900"
+            # - name: REDIS_URL
+            #   valueFrom:
+            #     secretKeyRef: { name: gallery-redis, key: url }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            # Generous memory: every running notebook kernel lives in this pod.
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 4Gi }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        # Scratch, uploads, sandbox envs. Swap for a PVC (see pvc.yaml) if
+        # uploads or the disk cache must survive pod restarts.
+        - name: data
+          emptyDir:
+            sizeLimit: 10Gi

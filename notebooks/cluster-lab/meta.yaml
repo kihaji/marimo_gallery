@@ -1,0 +1,7 @@
+title: Cluster Lab
+description: >
+  Interactive K-means playground running in an isolated sandbox with its own
+  dependencies (scikit-learn, matplotlib). Expensive fits are cached across
+  sessions via Redis or disk.
+tags: [ml, sandbox, scikit-learn]
+sandbox: true

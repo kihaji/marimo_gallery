@@ -1,0 +1,5 @@
+title: CSV Explorer
+description: >
+  Upload any CSV and get an instant column profile, an interactive data
+  explorer, histograms, and a downloadable summary report.
+tags: [tools, upload, pandas]

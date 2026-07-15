@@ -1,0 +1,11 @@
+# Optional: persistent storage for /data (uploads + disk cache + uv sandbox
+# cache) instead of the emptyDir in deployment.yaml.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: marimo-gallery-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi

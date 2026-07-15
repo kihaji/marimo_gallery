@@ -1,0 +1,24 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - gallery-data:/data
+    environment:
+      GALLERY_IDLE_TTL_SECONDS: "900"
+      # Uncomment when running with the redis profile:
+      # REDIS_URL: redis://redis:6379/0
+
+  # Optional cross-session cache backend; without it the shared lib falls
+  # back to the disk cache automatically.
+  #   docker compose --profile redis up --build
+  redis:
+    image: redis:7-alpine
+    profiles: [redis]
+    volumes:
+      - redis-data:/data
+
+volumes:
+  gallery-data:
+  redis-data:
