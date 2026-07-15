@@ -97,8 +97,14 @@ or a raw cron expression — fill in the notebook's parameters, and the gateway
 runs `marimo export html` at each fire. Every run produces a **viewable HTML
 report** of all cell outputs plus a captured log, listed in the run history
 with status and duration ("Run now" triggers an immediate run). Sandboxed
-notebooks run with `--sandbox`, and report/run visibility follows the
-notebook's `requires_login` flag.
+notebooks run with `--sandbox`.
+
+**Schedules are private.** Parameters (and the reports they produce) may be
+sensitive, so users only see, edit, delete, and run their own schedules, and
+run history/reports are visible only to their creator — scheduled runs belong
+to whoever created the schedule, even after the schedule is deleted. The
+schedules pages therefore always require login, including for notebooks that
+are otherwise public.
 
 Schedules and history live in SQLite at `<storage_root>/gallery.db`; artifacts
 under `<storage_root>/runs/<slug>/<run_id>/`. The newest

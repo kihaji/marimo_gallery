@@ -13,7 +13,10 @@ async def client(tmp_path, monkeypatch):
     monkeypatch.setenv("GALLERY_STORAGE_ROOT", str(tmp_path))
     monkeypatch.setattr(settings, "storage_root", tmp_path)
     users_file = tmp_path / "users.yaml"
-    users_file.write_text(f"tester: {auth.hash_password('pw123', iterations=1000)}\n")
+    users_file.write_text(
+        f"tester: {auth.hash_password('pw123', iterations=1000)}\n"
+        f"other: {auth.hash_password('pw456', iterations=1000)}\n"
+    )
     monkeypatch.setattr(settings, "users_file", users_file)
     transport = httpx.ASGITransport(app=app)
     async with app.router.lifespan_context(app):
@@ -21,8 +24,10 @@ async def client(tmp_path, monkeypatch):
             yield http
 
 
-async def login(http):
-    resp = await http.post("/login", data={"username": "tester", "password": "pw123", "next": "/"})
+async def login(http, username="tester", password="pw123"):
+    resp = await http.post(
+        "/login", data={"username": username, "password": password, "next": "/"}
+    )
     assert resp.status_code == 303
 
 
@@ -47,18 +52,15 @@ def stub_runner(tmp_path):
 # -- page + read access ---------------------------------------------------------
 
 
-async def test_page_public_notebook_anonymous(client):
+async def test_page_requires_login_even_for_public_notebooks(client):
+    resp = await client.get("/schedules/sales-dashboard")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login?next=/schedules/sales-dashboard"
+    assert (await client.get("/api/schedules/sales-dashboard")).status_code == 401
+    await login(client)
     resp = await client.get("/schedules/sales-dashboard")
     assert resp.status_code == 200
     assert "sched-data" in resp.text
-
-
-async def test_page_protected_notebook_redirects(client):
-    resp = await client.get("/schedules/csv-explorer")
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/login?next=/schedules/csv-explorer"
-    resp = await client.get("/api/schedules/csv-explorer")
-    assert resp.status_code == 401
 
 
 async def test_unknown_slug(client):
@@ -78,7 +80,7 @@ async def test_anonymous_mutations_blocked(client):
     ).status_code == 401
     assert (
         await client.patch("/api/schedules/sales-dashboard/1", json={"enabled": False})
-    ).status_code == 404  # no such schedule yet; 404 before auth is fine
+    ).status_code == 401
     await login(client)
     schedule = (
         await client.post(
@@ -213,7 +215,7 @@ async def test_run_now_and_artifacts(client, tmp_path):
     assert (await client.get(f"/runs/cluster-lab/{run['id']}/report")).status_code == 404
 
 
-async def test_protected_run_artifacts_require_login(client, tmp_path):
+async def test_run_artifacts_require_login(client, tmp_path):
     runner = stub_runner(tmp_path)
     await login(client)
     run = (await client.post("/api/schedules/csv-explorer/run", json={"params": {}})).json()
@@ -223,3 +225,84 @@ async def test_protected_run_artifacts_require_login(client, tmp_path):
     assert (await client.get(f"/runs/csv-explorer/{run['id']}/report")).status_code == 200
     await client.post("/logout")
     assert (await client.get(f"/runs/csv-explorer/{run['id']}/report")).status_code == 401
+
+
+# -- per-user isolation -----------------------------------------------------------
+
+
+async def test_users_cannot_see_or_touch_each_others_schedules(client, tmp_path):
+    runner = stub_runner(tmp_path)
+    await login(client)  # tester
+    schedule = (
+        await client.post(
+            "/api/schedules/sales-dashboard",
+            json={
+                "name": "secret nightly",
+                "cadence": {"kind": "daily", "time": "02:00"},
+                "params": {"region": "West"},
+            },
+        )
+    ).json()
+    run = (
+        await client.post(
+            "/api/schedules/sales-dashboard/run", json={"params": {"region": "West"}}
+        )
+    ).json()
+    run_dir = runner.run_dir("sales-dashboard", run["id"])
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.html").write_text("<html>sensitive</html>")
+
+    # tester sees their own things
+    mine = (await client.get("/api/schedules/sales-dashboard")).json()
+    assert [s["name"] for s in mine["schedules"]] == ["secret nightly"]
+    assert [r["id"] for r in mine["runs"]] == [run["id"]]
+
+    # switch user
+    await client.post("/logout")
+    await login(client, "other", "pw456")
+
+    theirs = (await client.get("/api/schedules/sales-dashboard")).json()
+    assert theirs["schedules"] == []
+    assert theirs["runs"] == []
+    assert "secret nightly" not in (await client.get("/schedules/sales-dashboard")).text
+
+    sid = schedule["id"]
+    patch = await client.patch(
+        f"/api/schedules/sales-dashboard/{sid}", json={"enabled": False}
+    )
+    assert patch.status_code == 404
+    assert (await client.delete(f"/api/schedules/sales-dashboard/{sid}")).status_code == 404
+    assert (
+        await client.get(f"/runs/sales-dashboard/{run['id']}/report")
+    ).status_code == 404
+    assert (await client.get(f"/runs/sales-dashboard/{run['id']}/log")).status_code == 404
+
+    # tester's schedule is untouched
+    await client.post("/logout")
+    await login(client)
+    mine = (await client.get("/api/schedules/sales-dashboard")).json()
+    assert mine["schedules"][0]["enabled"] is True
+
+
+async def test_scheduled_runs_belong_to_schedule_creator(client, tmp_path):
+    stub_runner(tmp_path)
+    await login(client)
+    schedule = (
+        await client.post(
+            "/api/schedules/sales-dashboard",
+            json={"name": "mine", "cadence": {"kind": "daily", "time": "02:00"}},
+        )
+    ).json()
+    # Make it due and fire the scheduler synchronously.
+    app.state.db.set_next_run(schedule["id"], "2000-01-01T00:00:00+00:00")
+    app.state.scheduler._tick()
+    for _ in range(50):
+        runs = (await client.get("/api/schedules/sales-dashboard")).json()["runs"]
+        if runs and runs[0]["status"] == "success":
+            break
+        await asyncio.sleep(0.05)
+    assert runs and runs[0]["created_by"] == "tester" and not runs[0]["manual"]
+
+    await client.post("/logout")
+    await login(client, "other", "pw456")
+    assert (await client.get("/api/schedules/sales-dashboard")).json()["runs"] == []

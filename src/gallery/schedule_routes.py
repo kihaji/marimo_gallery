@@ -1,7 +1,9 @@
 """Routes for notebook schedules, run-now, and run artifacts.
 
-Viewing follows the notebook's requires_login flag (same rule as the app
-proxy); managing schedules always requires login.
+Schedules are private to their creator: users only see, edit, delete, and
+run-now their own, and run history/reports are likewise owner-only (schedule
+parameters and report contents may be sensitive). Everything here therefore
+requires login, regardless of the notebook's requires_login flag.
 """
 
 from __future__ import annotations
@@ -32,10 +34,6 @@ router = APIRouter()
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def _authorized(meta: NotebookMeta, user: str | None) -> bool:
-    return not meta.requires_login or user is not None
-
-
 def _meta_or_none(request: Request, slug: str) -> NotebookMeta | None:
     return request.app.state.registry.notebooks.get(slug)
 
@@ -48,15 +46,18 @@ def _schedule_view(request: Request, schedule: dict) -> dict:
     return schedule | {"cadence_label": describe_cron(schedule["cron"])}
 
 
-def _payload(request: Request, meta: NotebookMeta) -> dict:
+def _payload(request: Request, meta: NotebookMeta, user: str) -> dict:
+    """Everything is filtered to the requesting user's own schedules and runs."""
     db = request.app.state.db
     return {
         "slug": meta.slug,
         "title": meta.title,
         "parameters": [p.model_dump() for p in meta.parameters],
-        "schedules": [_schedule_view(request, s) for s in db.list_schedules(meta.slug)],
-        "runs": db.list_runs(meta.slug),
-        "active": db.has_active_runs(meta.slug),
+        "schedules": [
+            _schedule_view(request, s) for s in db.list_schedules(meta.slug, created_by=user)
+        ],
+        "runs": db.list_runs(meta.slug, created_by=user),
+        "active": db.has_active_runs(meta.slug, created_by=user),
     }
 
 
@@ -66,7 +67,7 @@ async def schedules_page(request: Request, slug: str):
     if meta is None:
         return Response("unknown notebook", status_code=404)
     user = current_user(request)
-    if not _authorized(meta, user):
+    if user is None:
         return RedirectResponse(f"/login?next=/schedules/{slug}", status_code=303)
     return request.app.state.templates.TemplateResponse(
         request,
@@ -75,7 +76,7 @@ async def schedules_page(request: Request, slug: str):
             "meta": meta,
             "user": user,
             "tz_name": time.strftime("%Z"),
-            "payload_json": json.dumps(_payload(request, meta) | {"user": user}),
+            "payload_json": json.dumps(_payload(request, meta, user) | {"user": user}),
         },
     )
 
@@ -85,9 +86,10 @@ async def api_list(request: Request, slug: str):
     meta = _meta_or_none(request, slug)
     if meta is None:
         return JSONResponse({"error": "unknown notebook"}, status_code=404)
-    if not _authorized(meta, current_user(request)):
+    user = current_user(request)
+    if user is None:
         return _login_required()
-    return _payload(request, meta)
+    return _payload(request, meta, user)
 
 
 @router.post("/api/schedules/{slug}")
@@ -117,15 +119,26 @@ async def api_create(request: Request, slug: str):
     return _schedule_view(request, schedule)
 
 
+def _owned_schedule(request: Request, slug: str, schedule_id: int, user: str | None):
+    """The schedule, only if it exists for this slug AND belongs to the user.
+    Others' schedules 404 rather than 403 so their existence isn't leaked."""
+    if request.app.state.registry.notebooks.get(slug) is None:
+        return None
+    schedule = request.app.state.db.get_schedule(schedule_id)
+    if schedule is None or schedule["slug"] != slug or schedule["created_by"] != user:
+        return None
+    return schedule
+
+
 @router.patch("/api/schedules/{slug}/{schedule_id}")
 async def api_update(request: Request, slug: str, schedule_id: int):
-    meta = _meta_or_none(request, slug)
-    db = request.app.state.db
-    schedule = db.get_schedule(schedule_id)
-    if meta is None or schedule is None or schedule["slug"] != slug:
-        return JSONResponse({"error": "unknown schedule"}, status_code=404)
-    if current_user(request) is None:
+    user = current_user(request)
+    if user is None:
         return _login_required()
+    db = request.app.state.db
+    schedule = _owned_schedule(request, slug, schedule_id, user)
+    if schedule is None:
+        return JSONResponse({"error": "unknown schedule"}, status_code=404)
     body = await request.json()
     if "enabled" in body:
         enabled = bool(body["enabled"])
@@ -135,15 +148,13 @@ async def api_update(request: Request, slug: str, schedule_id: int):
 
 @router.delete("/api/schedules/{slug}/{schedule_id}")
 async def api_delete(request: Request, slug: str, schedule_id: int):
-    meta = _meta_or_none(request, slug)
-    db = request.app.state.db
-    schedule = db.get_schedule(schedule_id)
-    if meta is None or schedule is None or schedule["slug"] != slug:
-        return JSONResponse({"error": "unknown schedule"}, status_code=404)
     user = current_user(request)
     if user is None:
         return _login_required()
-    db.delete_schedule(schedule_id)
+    schedule = _owned_schedule(request, slug, schedule_id, user)
+    if schedule is None:
+        return JSONResponse({"error": "unknown schedule"}, status_code=404)
+    request.app.state.db.delete_schedule(schedule_id)
     logger.info("[%s] schedule %s deleted by %s", slug, schedule_id, user)
     return {"deleted": schedule_id}
 
@@ -165,13 +176,15 @@ async def api_run_now(request: Request, slug: str):
 
 
 def _artifact_response(request: Request, slug: str, run_id: str, filename: str, media_type=None):
+    user = current_user(request)
+    if user is None:
+        return _login_required()
     meta = _meta_or_none(request, slug)
     if meta is None or not RUN_ID_RE.match(run_id):
         return Response(status_code=404)
-    if not _authorized(meta, current_user(request)):
-        return _login_required()
     run = request.app.state.db.get_run(run_id)
-    if run is None or run["slug"] != slug:
+    # Owner-only: run parameters and report contents may be sensitive.
+    if run is None or run["slug"] != slug or run["created_by"] != user:
         return Response(status_code=404)
     path = request.app.state.scheduler.runner.run_dir(slug, run_id) / filename
     if not path.is_file():

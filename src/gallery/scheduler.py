@@ -308,12 +308,19 @@ class Scheduler:
                     schedule["id"],
                 )
                 continue
-            run = self.db.create_run(meta.slug, schedule["params"], schedule_id=schedule["id"])
+            # Runs inherit the schedule creator so ownership-based visibility
+            # survives even if the schedule is later deleted.
+            run = self.db.create_run(
+                meta.slug,
+                schedule["params"],
+                schedule_id=schedule["id"],
+                created_by=schedule["created_by"],
+            )
             logger.info("[%s] schedule %s fired -> run %s", meta.slug, schedule["id"], run["id"])
             self._spawn_run(run, meta, schedule_id=schedule["id"])
 
     def run_now(self, meta: NotebookMeta, params: dict, user: str) -> dict:
-        run = self.db.create_run(meta.slug, params, created_by=user)
+        run = self.db.create_run(meta.slug, params, created_by=user, manual=True)
         logger.info("[%s] manual run %s by %s", meta.slug, run["id"], user)
         self._spawn_run(run, meta, schedule_id=None)
         return run

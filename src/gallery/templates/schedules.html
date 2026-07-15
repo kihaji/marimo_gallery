@@ -17,19 +17,15 @@
   <div class="controls">
     <a class="open-btn" href="/apps/{{ meta.slug }}/" target="_blank" rel="noopener">Open notebook ↗</a>
     <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
-    {% if user %}
     <form class="auth" method="post" action="/logout">
       <span class="user-name">{{ user }}</span>
       <button type="submit">Log out</button>
     </form>
-    {% else %}
-    <a class="auth login-link" href="/login?next=/schedules/{{ meta.slug }}">Log in</a>
-    {% endif %}
   </div>
 </header>
 
 <main class="schedules-main">
-  {% if user %}
+  <p class="auth-hint">Schedules and runs are private — only you can see the ones you create.</p>
   <section class="panel">
     <h2>New schedule</h2>
     <form id="create-form">
@@ -63,12 +59,9 @@
       <button type="submit" class="open-btn">Create schedule</button>
     </form>
   </section>
-  {% else %}
-  <p class="auth-hint"><a href="/login?next=/schedules/{{ meta.slug }}">Log in</a> to create schedules or run this notebook.</p>
-  {% endif %}
 
   <section class="panel">
-    <h2>Schedules</h2>
+    <h2>Your schedules</h2>
     <table class="sched-table" id="schedule-table">
       <thead><tr><th>Name</th><th>Cadence</th><th>Parameters</th><th>Next run</th><th>Enabled</th><th></th></tr></thead>
       <tbody></tbody>
@@ -78,8 +71,8 @@
 
   <section class="panel">
     <div class="panel-head">
-      <h2>Run history</h2>
-      {% if user %}<button id="run-now" class="open-btn" title="Run once with the parameter values above">Run now</button>{% endif %}
+      <h2>Your runs</h2>
+      <button id="run-now" class="open-btn" title="Run once with the parameter values above">Run now</button>
     </div>
     <table class="sched-table" id="run-table">
       <thead><tr><th>Started</th><th>Trigger</th><th>Parameters</th><th>Duration</th><th>Status</th><th>Output</th></tr></thead>

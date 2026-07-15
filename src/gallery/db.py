@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS runs (
   status      TEXT NOT NULL,
   params      TEXT NOT NULL DEFAULT '{}',
   created_by  TEXT,
+  manual      INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL,
   started_at  TEXT,
   finished_at TEXT,
@@ -77,6 +78,11 @@ class Database:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_DDL)
+        # Poor man's migration for databases created before the column existed.
+        try:
+            self._conn.execute("ALTER TABLE runs ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         self._conn.commit()
 
     def close(self) -> None:
@@ -107,13 +113,18 @@ class Database:
         ).fetchone()
         return _row_to_dict(row) if row else None
 
-    def list_schedules(self, slug: str | None = None) -> list[dict]:
-        if slug is None:
-            rows = self._conn.execute("SELECT * FROM schedules ORDER BY id").fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM schedules WHERE slug = ? ORDER BY id", (slug,)
-            ).fetchall()
+    def list_schedules(self, slug: str | None = None, created_by: str | None = None) -> list[dict]:
+        query = "SELECT * FROM schedules"
+        clauses, args = [], []
+        if slug is not None:
+            clauses.append("slug = ?")
+            args.append(slug)
+        if created_by is not None:
+            clauses.append("created_by = ?")
+            args.append(created_by)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        rows = self._conn.execute(query + " ORDER BY id", args).fetchall()
         return [_row_to_dict(r) for r in rows]
 
     def due_schedules(self, now_utc: str) -> list[dict]:
@@ -149,12 +160,13 @@ class Database:
         params: dict,
         schedule_id: int | None = None,
         created_by: str | None = None,
+        manual: bool = False,
     ) -> dict:
         run_id = uuid.uuid4().hex
         self._conn.execute(
             "INSERT INTO runs (id, schedule_id, slug, status, params, created_by,"
-            " created_at) VALUES (?, ?, ?, 'queued', ?, ?, ?)",
-            (run_id, schedule_id, slug, json.dumps(params), created_by, utcnow()),
+            " manual, created_at) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
+            (run_id, schedule_id, slug, json.dumps(params), created_by, int(manual), utcnow()),
         )
         self._conn.commit()
         return self.get_run(run_id)
@@ -178,21 +190,31 @@ class Database:
         )
         self._conn.commit()
 
-    def list_runs(self, slug: str, limit: int = 50) -> list[dict]:
-        rows = self._conn.execute(
+    def list_runs(self, slug: str, created_by: str | None = None, limit: int = 50) -> list[dict]:
+        query = (
             "SELECT runs.*, schedules.name AS schedule_name FROM runs"
             " LEFT JOIN schedules ON schedules.id = runs.schedule_id"
-            " WHERE runs.slug = ? ORDER BY runs.created_at DESC, runs.rowid DESC LIMIT ?",
-            (slug, limit),
+            " WHERE runs.slug = ?"
+        )
+        args: list = [slug]
+        if created_by is not None:
+            query += " AND runs.created_by = ?"
+            args.append(created_by)
+        rows = self._conn.execute(
+            query + " ORDER BY runs.created_at DESC, runs.rowid DESC LIMIT ?",
+            (*args, limit),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
 
-    def has_active_runs(self, slug: str | None = None) -> bool:
+    def has_active_runs(self, slug: str | None = None, created_by: str | None = None) -> bool:
         query = "SELECT 1 FROM runs WHERE status IN ('queued', 'running')"
-        args: tuple = ()
+        args: list = []
         if slug is not None:
             query += " AND slug = ?"
-            args = (slug,)
+            args.append(slug)
+        if created_by is not None:
+            query += " AND created_by = ?"
+            args.append(created_by)
         return self._conn.execute(query + " LIMIT 1", args).fetchone() is not None
 
     def recover_stale_runs(self) -> int:

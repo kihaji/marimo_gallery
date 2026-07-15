@@ -146,11 +146,9 @@ function renderRuns() {
   tbody.replaceChildren(
     ...data.runs.map((r) => {
       const tr = document.createElement("tr");
-      const trigger = r.schedule_id
-        ? esc(r.schedule_name || "schedule")
-        : r.created_by
-          ? `manual · ${esc(r.created_by)}`
-          : "schedule (deleted)";
+      const trigger = r.manual
+        ? "manual"
+        : esc(r.schedule_name || "schedule (deleted)");
       const links =
         r.status === "success"
           ? `<a href="/runs/${slug}/${r.id}/report" target="_blank" rel="noopener">Report</a> ·
