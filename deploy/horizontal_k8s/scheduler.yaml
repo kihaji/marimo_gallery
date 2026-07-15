@@ -1,0 +1,84 @@
+# The scheduler pod: same image as the gateway, but this is the ONE replica
+# with GALLERY_SCHEDULES_ENABLED=true. Scheduled and run-now notebook exports
+# execute HERE as `marimo export html` subprocesses — they do not run in the
+# nb-* Deployments, which only serve interactive sessions. Size this pod for
+# GALLERY_SCHEDULE_MAX_CONCURRENT_RUNS × the footprint of your heaviest
+# notebook export.
+#
+# It also serves the schedules UI/API and run artifacts, because gallery.db
+# and runs/ live on its PVC — the ingress routes /schedules, /api/schedules,
+# and /runs here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gallery-scheduler
+  labels:
+    app: gallery-scheduler
+spec:
+  replicas: 1 # exactly one — two schedulers means every schedule fires twice
+  strategy:
+    type: Recreate # RWO volume + "one active scheduler" both forbid overlap
+  selector:
+    matchLabels:
+      app: gallery-scheduler
+  template:
+    metadata:
+      labels:
+        app: gallery-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: marimo-gallery:latest # same image as the gateway
+          ports:
+            - containerPort: 8000
+          env:
+            - name: GALLERY_SCHEDULES_ENABLED
+              value: "true"
+            # Set here too so this pod never spawns interactive subprocesses
+            # (e.g. if someone hits /apps/* on it directly).
+            - name: GALLERY_BACKEND_URL_TEMPLATE
+              value: "http://nb-{slug}:2718"
+            - name: GALLERY_SCHEDULE_MAX_CONCURRENT_RUNS
+              value: "2"
+            - name: GALLERY_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: gallery-auth, key: secret-key }
+            - name: GALLERY_USERS_FILE
+              value: /etc/gallery/users.yaml
+            # - name: REDIS_URL
+            #   valueFrom:
+            #     secretKeyRef: { name: gallery-redis, key: url }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            # Every concurrent export loads and executes a full notebook in
+            # this pod. Budget ≈ max_concurrent_runs × heaviest export.
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 4Gi }
+          volumeMounts:
+            # gallery.db + runs/<slug>/<run_id>/ artifacts + the uv cache for
+            # sandboxed exports. Must persist: this IS the schedule store.
+            - { name: data, mountPath: /data }
+            - { name: users, mountPath: /etc/gallery, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: gallery-scheduler-data }
+        - name: users
+          secret: { secretName: gallery-auth, items: [{ key: users.yaml, path: users.yaml }] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gallery-scheduler
+spec:
+  selector:
+    app: gallery-scheduler
+  ports:
+    - port: 80
+      targetPort: 8000

@@ -1,0 +1,89 @@
+# cluster-lab is a sandboxed notebook (PEP 723 inline deps). Two ways to run
+# it in its own Deployment:
+#
+#   a) Keep --sandbox (below): uv builds the isolated env inside the pod on
+#      startup. Simple, but startup does dependency resolution — hence the
+#      startupProbe and the uv-cache volume.
+#   b) Better for production: bake a dedicated image for this notebook with
+#      its deps preinstalled and drop --sandbox. The pod is already the
+#      isolation boundary, so the sandbox adds nothing here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nb-cluster-lab
+  labels:
+    app: nb-cluster-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nb-cluster-lab
+  template:
+    metadata:
+      labels:
+        app: nb-cluster-lab
+        tier: notebook # networkpolicy.yaml selects on this
+    spec:
+      containers:
+        - name: notebook
+          image: marimo-gallery:latest
+          workingDir: /app/notebooks/cluster-lab
+          command:
+            - python
+            - -m
+            - marimo
+            - run
+            - app.py
+            - --host
+            - 0.0.0.0
+            - --port
+            - "2718"
+            - --headless
+            - --base-url
+            - /apps/cluster-lab
+            - --session-ttl
+            - "600"
+            - --sandbox
+          ports:
+            - containerPort: 2718
+          env:
+            - name: MARIMO_GALLERY_APP
+              value: cluster-lab
+            # The sandbox env doesn't contain the gallery package, so
+            # gallery_shared comes in via PYTHONPATH — same PoC mechanism the
+            # gateway uses locally. In production, publish gallery_shared as
+            # a wheel and list it in the notebook's PEP 723 deps instead.
+            - name: PYTHONPATH
+              value: /app/src
+          startupProbe:
+            # First boot resolves + downloads the PEP 723 deps.
+            httpGet: { path: /apps/cluster-lab/health, port: 2718 }
+            periodSeconds: 10
+            failureThreshold: 30 # up to 5 minutes
+          readinessProbe:
+            httpGet: { path: /apps/cluster-lab/health, port: 2718 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /apps/cluster-lab/health, port: 2718 }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 3Gi }
+          volumeMounts:
+            # Image sets UV_CACHE_DIR=/data/uv-cache; a PVC here would keep
+            # sandbox rebuilds fast across pod restarts.
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 5Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nb-cluster-lab
+spec:
+  selector:
+    app: nb-cluster-lab
+  ports:
+    - port: 2718
+      targetPort: 2718

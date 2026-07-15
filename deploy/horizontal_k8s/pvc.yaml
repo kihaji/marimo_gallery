@@ -1,0 +1,14 @@
+# Persistent /data for the scheduler pod only: gallery.db (schedules + run
+# history), run artifacts (report.html / run.log), and the uv cache that keeps
+# sandboxed exports fast. RWO is fine — exactly one pod mounts it, which is
+# also why SQLite is safe here (never put gallery.db on a shared RWX/NFS
+# volume with multiple writers).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gallery-scheduler-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi

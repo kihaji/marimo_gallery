@@ -49,19 +49,28 @@ stateful sessions.
 
 Split each notebook into its own Deployment + Service running
 `marimo run <app.py> --host 0.0.0.0 --port 2718 --base-url /apps/<slug>`, e.g.
-service `nb-sales-dashboard`. Then:
+service `nb-sales-dashboard`. This mode is built in: set
 
-- The gateway stops spawning subprocesses; `ProcessManager.base_url()` (see
-  `src/gallery/manager.py`, the "backend resolution" seam) returns
-  `http://nb-<slug>:2718` instead. Everything else is unchanged.
-- The gateway becomes stateless → scale it freely behind a plain Service.
+```yaml
+- name: GALLERY_BACKEND_URL_TEMPLATE
+  value: "http://nb-{slug}:2718"
+```
+
+and the gateway stops spawning subprocesses entirely — the proxy resolves
+each notebook to its Service DNS (`ProcessManager.base_url()` in
+`src/gallery/manager.py`) and the idle reaper is skipped. Then:
+
+- The gateway becomes stateless → scale it freely behind a plain Service, no
+  session affinity.
 - Each notebook gets its own resource requests/limits and an HPA; a heavy
   notebook can't starve the others.
 - Session affinity is then only needed per notebook Service if a notebook
   itself runs multiple replicas.
 
 This is the recommended production topology once more than a handful of teams
-share the gallery.
+share the gallery. **A complete worked example — gateway, all three
+notebooks, dedicated scheduler pod, ingress routing, network policy — lives
+in [`deploy/horizontal_k8s/`](../horizontal_k8s/README.md).**
 
 ## Scheduled runs
 
@@ -98,6 +107,12 @@ The scheduler runs **in-process in the gateway**. Two consequences:
 
    (CronJob-produced runs won't appear in the gallery's run history — that
    requires the in-process scheduler.)
+
+   Note that scheduled runs always execute as `marimo export html`
+   subprocesses **inside the scheduler's own pod** — even in the
+   per-notebook-Deployment topology, where the nb-* pods serve only
+   interactive sessions. Size the scheduler pod accordingly; see the
+   [horizontal example](../horizontal_k8s/README.md) for the full pattern.
 
 2. **Persist `/data`.** Schedules and run history live in
    `<storage_root>/gallery.db` with artifacts under `runs/` — use the PVC, not

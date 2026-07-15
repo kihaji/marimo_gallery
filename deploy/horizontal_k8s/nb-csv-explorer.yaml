@@ -1,0 +1,74 @@
+# csv-explorer has requires_login: true — that check happens at the GATEWAY
+# proxy, not here. This pod itself is unauthenticated inside the cluster, so
+# pair this topology with a NetworkPolicy (see README) that only lets the
+# gateway reach nb-* pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nb-csv-explorer
+  labels:
+    app: nb-csv-explorer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nb-csv-explorer
+  template:
+    metadata:
+      labels:
+        app: nb-csv-explorer
+        tier: notebook # networkpolicy.yaml selects on this
+    spec:
+      containers:
+        - name: notebook
+          image: marimo-gallery:latest
+          workingDir: /app/notebooks/csv-explorer
+          command:
+            - python
+            - -m
+            - marimo
+            - run
+            - app.py
+            - --host
+            - 0.0.0.0
+            - --port
+            - "2718"
+            - --headless
+            - --base-url
+            - /apps/csv-explorer
+            - --session-ttl
+            - "600"
+          ports:
+            - containerPort: 2718
+          env:
+            - name: MARIMO_GALLERY_APP
+              value: csv-explorer
+          readinessProbe:
+            httpGet: { path: /apps/csv-explorer/health, port: 2718 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /apps/csv-explorer/health, port: 2718 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+          volumeMounts:
+            # Uploads land here. emptyDir means they vanish on pod restart —
+            # swap for a small RWO PVC if uploads must survive.
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 5Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nb-csv-explorer
+spec:
+  selector:
+    app: nb-csv-explorer
+  ports:
+    - port: 2718
+      targetPort: 2718

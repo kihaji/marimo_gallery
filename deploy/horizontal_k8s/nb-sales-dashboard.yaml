@@ -1,0 +1,82 @@
+# One Deployment + Service per notebook. The Service name must match the
+# gateway's GALLERY_BACKEND_URL_TEMPLATE (nb-<slug>). To add a notebook to
+# this topology, copy this file, replace the slug, and adjust resources.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nb-sales-dashboard
+  labels:
+    app: nb-sales-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nb-sales-dashboard
+  template:
+    metadata:
+      labels:
+        app: nb-sales-dashboard
+        tier: notebook # networkpolicy.yaml selects on this
+    spec:
+      containers:
+        - name: notebook
+          image: marimo-gallery:latest # same image; only the command differs
+          workingDir: /app/notebooks/sales-dashboard
+          command:
+            - python
+            - -m
+            - marimo
+            - run
+            - app.py
+            - --host
+            - 0.0.0.0
+            - --port
+            - "2718"
+            - --headless
+            - --base-url
+            - /apps/sales-dashboard
+            - --session-ttl
+            - "600"
+          ports:
+            - containerPort: 2718
+          env:
+            - name: MARIMO_GALLERY_APP
+              value: sales-dashboard
+            # - name: REDIS_URL
+            #   valueFrom:
+            #     secretKeyRef: { name: gallery-redis, key: url }
+          readinessProbe:
+            # marimo serves /health under its --base-url.
+            httpGet: { path: /apps/sales-dashboard/health, port: 2718 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /apps/sales-dashboard/health, port: 2718 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            # Sized per notebook: this is the whole point of the topology.
+            # Memory grows with concurrent user sessions of THIS notebook.
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+          volumeMounts:
+            # scratch/ and uploads/ for this notebook only (image sets
+            # GALLERY_STORAGE_ROOT=/data). Use REDIS_URL for shared cache.
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nb-sales-dashboard
+spec:
+  selector:
+    app: nb-sales-dashboard
+  ports:
+    - port: 2718
+      targetPort: 2718
+  # If you raise this notebook's replicas above 1, sessions must stick to a
+  # pod (kernel state lives in the process):
+  # sessionAffinity: ClientIP

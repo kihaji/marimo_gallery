@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     max_upload_bytes: int = 100 * 1024 * 1024
 
+    # External backends: when set (e.g. "http://nb-{slug}:2718"), the gateway
+    # spawns nothing and proxies each notebook to this URL instead — the
+    # per-notebook-Deployment topology in deploy/horizontal_k8s/.
+    backend_url_template: str | None = None
+
     redis_url: str | None = None
 
     # Scheduled runs. The scheduler is in-process: with multiple gateway

@@ -62,6 +62,24 @@ async def test_page_load_returns_starting_page(client):
     assert "Starting Sales Dashboard" in resp.text
 
 
+async def test_external_backend_template_skips_spawning(tmp_path, monkeypatch):
+    """GALLERY_BACKEND_URL_TEMPLATE resolves to service DNS and never spawns."""
+    monkeypatch.setenv("GALLERY_STORAGE_ROOT", str(tmp_path))
+    settings = Settings(backend_url_template="http://nb-{slug}:2718")
+    registry = Registry(REPO_ROOT / "notebooks")
+    manager = ProcessManager(settings, REPO_ROOT)
+    manager.sync(registry.scan())
+    try:
+        assert manager.base_url("sales-dashboard") == "http://nb-sales-dashboard:2718"
+        managed = manager.get("sales-dashboard")
+        assert managed.state == AppState.RUNNING  # proxy goes straight through
+        assert (await manager.ensure_running("sales-dashboard")).proc is None
+        manager.start_reaper()
+        assert manager._reaper_task is None
+    finally:
+        await manager.shutdown()
+
+
 @pytest.mark.slow
 async def test_full_lifecycle(tmp_path, monkeypatch):
     """Lazy start a real marimo subprocess, proxy to it, then idle-reap it."""

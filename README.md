@@ -190,6 +190,7 @@ Environment variables (prefix `GALLERY_`, see `src/gallery/config.py`):
 | `GALLERY_MARIMO_SESSION_TTL` | `600` | marimo's own per-client session TTL (keep ≤ idle TTL) |
 | `GALLERY_MAX_UPLOAD_BYTES` | `104857600` | HTTP upload cap enforced at the proxy |
 | `GALLERY_PORT_RANGE_START/END` | `10000`/`10999` | internal ports for notebook processes |
+| `GALLERY_BACKEND_URL_TEMPLATE` | unset | e.g. `http://nb-{slug}:2718`: proxy to external per-notebook services instead of spawning (see `deploy/horizontal_k8s/`) |
 | `GALLERY_SCHEDULES_ENABLED` | `true` | run the in-process scheduler (disable on extra replicas) |
 | `GALLERY_SCHEDULE_TICK_SECONDS` | `20` | how often due schedules are checked |
 | `GALLERY_SCHEDULE_MAX_CONCURRENT_RUNS` | `2` | scheduled/manual runs executing at once |
@@ -203,11 +204,13 @@ Environment variables (prefix `GALLERY_`, see `src/gallery/config.py`):
 ## Scaling under load
 
 Short version: raise pod resources first; when one pod isn't enough, split
-each notebook into its own Deployment behind the gateway (a one-method change
-at the resolver seam in `src/gallery/manager.py`) so notebooks scale
-independently and the gateway becomes stateless. Multi-replica with session
-affinity is possible but fragile for stateful sessions. Full discussion:
-[`deploy/k8s/README.md`](deploy/k8s/README.md).
+each notebook into its own Deployment behind the gateway (set
+`GALLERY_BACKEND_URL_TEMPLATE` — built in) so notebooks scale independently
+and the gateway becomes stateless. Multi-replica with session affinity is
+possible but fragile for stateful sessions. Full discussion in
+[`deploy/k8s/README.md`](deploy/k8s/README.md); a complete per-notebook
+example including the dedicated scheduler pod is in
+[`deploy/horizontal_k8s/`](deploy/horizontal_k8s/README.md).
 
 ## Security notes for production
 

@@ -1,0 +1,13 @@
+# kubectl apply -k deploy/horizontal_k8s/
+# Create the gallery-auth Secret first (see secret.example.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - pvc.yaml
+  - gateway.yaml
+  - scheduler.yaml
+  - nb-sales-dashboard.yaml
+  - nb-csv-explorer.yaml
+  - nb-cluster-lab.yaml
+  - ingress.yaml
+  - networkpolicy.yaml

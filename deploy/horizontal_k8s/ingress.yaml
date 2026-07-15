@@ -1,0 +1,41 @@
+# Path-based routing is what makes the split work:
+#
+#   /schedules, /api/schedules, /runs  ->  scheduler pod (owns gallery.db +
+#                                          run artifacts on its PVC)
+#   everything else                    ->  gateway replicas (stateless)
+#
+# Gateway replicas each open an EMPTY local gallery.db, so schedule traffic
+# must never land on them — these path rules are load-bearing, not cosmetic.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: marimo-gallery
+  annotations:
+    # marimo kernels speak WebSocket; long-lived connections need generous
+    # timeouts (nginx-ingress shown; adapt for your controller).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Uploads stream through the gateway, which enforces
+    # GALLERY_MAX_UPLOAD_BYTES itself (100 MB default).
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+spec:
+  rules:
+    - host: gallery.example.com # replace
+      http:
+        paths:
+          - path: /schedules
+            pathType: Prefix
+            backend:
+              service: { name: gallery-scheduler, port: { number: 80 } }
+          - path: /api/schedules
+            pathType: Prefix
+            backend:
+              service: { name: gallery-scheduler, port: { number: 80 } }
+          - path: /runs
+            pathType: Prefix
+            backend:
+              service: { name: gallery-scheduler, port: { number: 80 } }
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: gallery-gateway, port: { number: 80 } }

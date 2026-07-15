@@ -84,18 +84,26 @@ class ProcessManager:
     def sync(self, notebooks: dict[str, NotebookMeta]) -> None:
         """Create a managed app per registry entry (called once at startup)."""
         for slug, meta in notebooks.items():
-            self.apps[slug] = ManagedApp(meta)
+            app = ManagedApp(meta)
+            if self.settings.backend_url_template:
+                # External backends: nothing to spawn, the notebook is served
+                # elsewhere (its own Deployment). RUNNING sends the proxy
+                # straight through without the lazy-start path.
+                app.state = AppState.RUNNING
+            self.apps[slug] = app
 
     def get(self, slug: str) -> ManagedApp | None:
         return self.apps.get(slug)
 
     # -- backend resolution --------------------------------------------------
-    # The proxy resolves backends only through this method. To scale out on
-    # Kubernetes with one Deployment per notebook, replace its body with a
-    # lookup of the notebook's Service DNS (e.g. http://nb-<slug>:2718) and
-    # skip spawning entirely — the rest of the gateway is unchanged.
+    # The proxy resolves backends only through this method. With
+    # GALLERY_BACKEND_URL_TEMPLATE set (one Deployment per notebook, see
+    # deploy/horizontal_k8s/), it resolves to the notebook's Service DNS and
+    # the gateway never spawns subprocesses — the rest is unchanged.
 
     def base_url(self, slug: str) -> str:
+        if self.settings.backend_url_template:
+            return self.settings.backend_url_template.format(slug=slug)
         app = self.apps[slug]
         return f"http://127.0.0.1:{app.port}"
 
@@ -263,6 +271,8 @@ class ProcessManager:
     # -- idle reaping ---------------------------------------------------------
 
     def start_reaper(self) -> None:
+        if self.settings.backend_url_template:
+            return  # nothing local to reap; notebook pods manage themselves
         self._reaper_task = asyncio.get_running_loop().create_task(self._reap_loop())
 
     async def _reap_loop(self) -> None:

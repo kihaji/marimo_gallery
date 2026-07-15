@@ -1,0 +1,20 @@
+# The notebook pods themselves are unauthenticated — requires_login is
+# enforced at the gateway proxy. This policy makes the gateway the only way
+# in, so nothing else in the cluster can hit a protected notebook directly.
+# (Requires a CNI that enforces NetworkPolicy, e.g. Calico or Cilium.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notebooks-from-gateway-only
+spec:
+  podSelector:
+    matchLabels:
+      tier: notebook
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gallery-gateway
+      ports:
+        - port: 2718

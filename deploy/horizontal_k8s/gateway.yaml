@@ -1,0 +1,79 @@
+# Stateless gateway: index, auth, and the reverse proxy. With
+# GALLERY_BACKEND_URL_TEMPLATE set it spawns no marimo subprocesses, so it
+# scales freely — session state lives in the per-notebook pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gallery-gateway
+  labels:
+    app: gallery-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gallery-gateway
+  template:
+    metadata:
+      labels:
+        app: gallery-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: marimo-gallery:latest # replace with your registry image
+          ports:
+            - containerPort: 8000
+          env:
+            # One Service per notebook, named nb-<slug> (see nb-*.yaml).
+            - name: GALLERY_BACKEND_URL_TEMPLATE
+              value: "http://nb-{slug}:2718"
+            # The scheduler runs ONLY in the scheduler Deployment. Never
+            # enable it on a multi-replica Deployment: every replica would
+            # fire every schedule.
+            - name: GALLERY_SCHEDULES_ENABLED
+              value: "false"
+            # Same key on every pod (gateway + scheduler) or session cookies
+            # only validate on the pod that issued them.
+            - name: GALLERY_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: gallery-auth, key: secret-key }
+            - name: GALLERY_USERS_FILE
+              value: /etc/gallery/users.yaml
+            # - name: REDIS_URL
+            #   valueFrom:
+            #     secretKeyRef: { name: gallery-redis, key: url }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            # Small: it only routes bytes. Kernel memory lives in nb-* pods.
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          volumeMounts:
+            - { name: users, mountPath: /etc/gallery, readOnly: true }
+            # The image sets GALLERY_STORAGE_ROOT=/data. The gateway barely
+            # touches it (each replica opens an empty local gallery.db — the
+            # ingress routes all schedule paths to the scheduler pod instead).
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: users
+          secret: { secretName: gallery-auth, items: [{ key: users.yaml, path: users.yaml }] }
+        - name: data
+          emptyDir: { sizeLimit: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gallery-gateway
+spec:
+  selector:
+    app: gallery-gateway
+  ports:
+    - port: 80
+      targetPort: 8000
+  # No session affinity needed: the gateway holds no session state in this
+  # topology. Affinity concerns move to the per-notebook Services.
