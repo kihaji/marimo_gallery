@@ -27,5 +27,12 @@ class Settings(BaseSettings):
 
     redis_url: str | None = None
 
+    # Authentication. users_file maps usernames to pbkdf2 hashes (generate
+    # entries with `uv run python -m gallery.passwd <username>`). Set
+    # secret_key in production so sessions survive gateway restarts.
+    users_file: Path = Path("users.yaml")
+    secret_key: str | None = None
+    session_max_age_seconds: int = 8 * 3600
+
 
 settings = Settings()

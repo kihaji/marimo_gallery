@@ -44,7 +44,7 @@ Manifests and a scaling guide live in [`deploy/k8s/`](deploy/k8s/README.md).
 
 ## Adding a notebook
 
-Drop a directory into `notebooks/` and click ⟳ in the gallery (or restart):
+Drop a directory into `notebooks/` and restart the gateway:
 
 ```
 notebooks/my-notebook/
@@ -61,12 +61,33 @@ description: What it does.    # required
 tags: [team-x, dashboard]     # required, at least one
 sandbox: false                # true = run with `marimo run --sandbox` (see below)
 include_code: false           # true = users can view notebook source
+requires_login: false         # true = hidden from the index and blocked until login
 session_ttl: 600              # optional marimo --session-ttl override
 enabled: true                 # false hides it from the gallery
 ```
 
 The directory name is the slug (`[a-z0-9-]`, becomes the URL). Broken entries
 are logged and skipped — they never take the gallery down.
+
+## Authentication
+
+Username/password login with signed-cookie sessions. Notebooks with
+`requires_login: true` are hidden from the gallery index and blocked at the
+proxy (HTTP and WebSocket) until the user logs in; everything else stays
+public. The example `csv-explorer` notebook is protected.
+
+Users live in `users.yaml` (gitignored) as PBKDF2 hashes:
+
+```bash
+cp users.example.yaml users.yaml            # demo user: demo / demo1234 — replace it
+uv run python -m gallery.passwd alice >> users.yaml
+```
+
+Set `GALLERY_SECRET_KEY` in production so sessions survive gateway restarts
+(in Kubernetes, mount it and `users.yaml` from a Secret). To move to SSO
+later, replace the `/login` routes in `src/gallery/auth.py` with an OIDC flow
+that sets the same `session["user"]` key — the per-notebook checks are
+unchanged.
 
 ## Dependency management
 
@@ -113,6 +134,9 @@ Environment variables (prefix `GALLERY_`, see `src/gallery/config.py`):
 | `GALLERY_MARIMO_SESSION_TTL` | `600` | marimo's own per-client session TTL (keep ≤ idle TTL) |
 | `GALLERY_MAX_UPLOAD_BYTES` | `104857600` | HTTP upload cap enforced at the proxy |
 | `GALLERY_PORT_RANGE_START/END` | `10000`/`10999` | internal ports for notebook processes |
+| `GALLERY_USERS_FILE` | `users.yaml` | username → password-hash map for login |
+| `GALLERY_SECRET_KEY` | random per boot | session-cookie signing key; set it in production |
+| `GALLERY_SESSION_MAX_AGE_SECONDS` | `28800` | login session lifetime |
 | `REDIS_URL` | unset | enables the Redis cache backend |
 
 ## Scaling under load
@@ -126,8 +150,10 @@ affinity is possible but fragile for stateful sessions. Full discussion:
 
 ## Security notes for production
 
-- Add authentication at the marked middleware slot in `src/gallery/main.py`
-  (or at your ingress). Everything, including WebSockets, flows through it.
+- Set `GALLERY_SECRET_KEY`, replace the demo user, and serve over TLS —
+  session cookies and passwords are only as safe as the transport. The login
+  form has no CSRF token or rate limiting yet; add both (or move auth to your
+  ingress/SSO) before exposing beyond a trusted network.
 - `include_code: false` (the default) keeps notebook source off the client.
 - Notebook code runs with the gateway's privileges — treat the notebooks
   directory as code review territory, and run the container as the provided

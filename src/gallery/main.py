@@ -5,10 +5,14 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import secrets
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
+from gallery import auth
 from gallery.config import settings
 from gallery.manager import ProcessManager
 from gallery.proxy import make_http_client
@@ -39,6 +43,9 @@ async def lifespan(app: FastAPI):
     notebooks_dir = settings.notebooks_dir
     if not notebooks_dir.is_absolute():
         notebooks_dir = REPO_ROOT / notebooks_dir
+    users_file = settings.users_file
+    if not users_file.is_absolute():
+        users_file = REPO_ROOT / users_file
 
     registry = Registry(notebooks_dir)
     manager = ProcessManager(settings, REPO_ROOT)
@@ -46,6 +53,7 @@ async def lifespan(app: FastAPI):
     manager.start_reaper()
 
     app.state.settings = settings
+    app.state.users = auth.load_users(users_file)
     app.state.registry = registry
     app.state.manager = manager
     app.state.http_client = make_http_client()
@@ -59,14 +67,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="marimo gallery", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
-# AUTH SLOT: every route — index, APIs, and the /apps/* proxy (HTTP and WS) —
-# flows through this single ASGI app, so gateway middleware is the one place
-# to enforce authentication. For SSO, add e.g. an OIDC middleware here:
-#
-#   app.add_middleware(OIDCMiddleware, exempt_paths=["/healthz"])
-#
-# Keep /healthz exempt so Kubernetes probes keep working.
+# AUTH: every route — index, APIs, and the /apps/* proxy (HTTP and WS) —
+# flows through this single ASGI app, so middleware here covers everything.
+# SessionMiddleware signs the login cookie and also applies to WebSocket
+# connections. To swap username/password for SSO later, replace the /login
+# routes in gallery/auth.py with an OIDC flow that sets the same
+# session["user"] key; the per-notebook checks in routes.py stay unchanged.
+# Keep /healthz unauthenticated so Kubernetes probes keep working.
 # ---------------------------------------------------------------------------
+if settings.secret_key is None:
+    logging.getLogger(__name__).warning(
+        "GALLERY_SECRET_KEY not set; using a random key — logins will not "
+        "survive gateway restarts"
+    )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.secret_key or secrets.token_hex(32),
+    max_age=settings.session_max_age_seconds,
+    same_site="lax",
+)
 
 app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
+app.include_router(auth.router)
 app.include_router(router)

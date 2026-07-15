@@ -20,10 +20,21 @@
       <option value="title">Title A–Z</option>
       <option value="recent">Recently updated</option>
     </select>
-    <button id="refresh" title="Rescan the notebooks directory">⟳</button>
     <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
+    {% if user %}
+    <form class="auth" method="post" action="/logout">
+      <span class="user-name">{{ user }}</span>
+      <button type="submit">Log out</button>
+    </form>
+    {% else %}
+    <a class="auth login-link" href="/login">Log in</a>
+    {% endif %}
   </div>
 </header>
+
+{% if not user %}
+<p class="auth-hint">Some notebooks are only visible after <a href="/login">logging in</a>.</p>
+{% endif %}
 
 <nav id="tagbar" class="tagbar" aria-label="Filter by tag"></nav>
 
@@ -49,6 +60,7 @@
       <div class="card-tags"></div>
     </div>
     <div class="card-footer">
+      <span class="badge-lock" hidden title="Requires login">🔒</span>
       <span class="badge-sandbox" hidden title="Runs in an isolated environment">sandboxed</span>
       <a class="open-btn" target="_blank" rel="noopener">Open ↗</a>
     </div>

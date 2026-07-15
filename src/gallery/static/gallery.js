@@ -1,6 +1,6 @@
 "use strict";
 
-let notebooks = JSON.parse(document.getElementById("nb-data").textContent);
+const notebooks = JSON.parse(document.getElementById("nb-data").textContent);
 
 const grid = document.getElementById("grid");
 const tagbar = document.getElementById("tagbar");
@@ -78,6 +78,7 @@ function render() {
         })
       );
       card.querySelector(".badge-sandbox").hidden = !nb.sandbox;
+      card.querySelector(".badge-lock").hidden = !nb.requires_login;
       card.querySelector(".open-btn").href = nb.url;
       return card;
     })
@@ -114,12 +115,6 @@ function toggleTag(t) {
 // ---- controls ---------------------------------------------------------------
 searchInput.addEventListener("input", () => { state.q = searchInput.value; render(); });
 sortSelect.addEventListener("change", () => { state.sort = sortSelect.value; render(); });
-
-document.getElementById("refresh").addEventListener("click", async () => {
-  await fetch("/api/refresh", { method: "POST" });
-  notebooks = await (await fetch("/api/notebooks")).json();
-  render();
-});
 
 // ---- theme ------------------------------------------------------------------
 document.getElementById("theme-toggle").addEventListener("click", () => {

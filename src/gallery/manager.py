@@ -62,20 +62,9 @@ class ProcessManager:
     # -- registry sync ------------------------------------------------------
 
     def sync(self, notebooks: dict[str, NotebookMeta]) -> None:
-        """Reconcile managed apps with a fresh registry scan."""
-        for slug in list(self.apps):
-            if slug not in notebooks:
-                logger.info("[%s] removed from registry; stopping", slug)
-                asyncio.get_running_loop().create_task(self.stop(slug))
-                del self.apps[slug]
+        """Create a managed app per registry entry (called once at startup)."""
         for slug, meta in notebooks.items():
-            existing = self.apps.get(slug)
-            if existing is None:
-                self.apps[slug] = ManagedApp(meta)
-            else:
-                existing.meta = meta
-        # NOTE: a changed app.py takes effect on the next (re)start; idle
-        # reaping recycles processes naturally.
+            self.apps[slug] = ManagedApp(meta)
 
     def get(self, slug: str) -> ManagedApp | None:
         return self.apps.get(slug)

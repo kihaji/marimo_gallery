@@ -65,6 +65,22 @@ body {
 }
 .controls button:hover, .controls select:hover { border-color: var(--accent); }
 
+.auth { display: flex; align-items: center; gap: 0.5rem; margin: 0; }
+.auth .user-name { color: var(--muted); font-size: 0.9rem; }
+.auth button {
+  padding: 0.45rem 0.7rem; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); color: var(--fg); cursor: pointer; font-size: 0.95rem;
+}
+.auth button:hover { border-color: var(--accent); }
+a.login-link {
+  padding: 0.45rem 0.9rem; border-radius: 8px; background: var(--accent);
+  color: var(--accent-fg); text-decoration: none; font-size: 0.95rem; font-weight: 600;
+}
+.auth-hint { color: var(--muted); font-size: 0.85rem; padding: 0.6rem 1.5rem 0; margin: 0; }
+.auth-hint a { color: var(--accent); }
+
+.badge-lock { font-size: 0.85rem; margin-right: auto; }
+
 .tagbar {
   display: flex;
   flex-wrap: wrap;

@@ -29,14 +29,11 @@ async def client(tmp_path, monkeypatch):
             yield http
 
 
-async def test_healthz_and_notebook_listing(client):
+async def test_healthz(client):
     resp = await client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json()["notebooks"] == 3
-
-    resp = await client.get("/api/notebooks")
-    slugs = {nb["slug"] for nb in resp.json()}
-    assert slugs == {"sales-dashboard", "csv-explorer", "cluster-lab"}
+    assert resp.json()["running"] == 0
 
 
 async def test_index_page_embeds_data(client):

@@ -1,0 +1,5 @@
+# Gallery users: one "username: password-hash" entry per line.
+# Generate entries with:  uv run python -m gallery.passwd <username>
+# Copy this file to users.yaml (users.yaml is gitignored).
+# The demo user below has password "demo1234" — replace it.
+demo: pbkdf2_sha256$390000$6f0da1f849def5ee95cb5fcbe6b992dc$3598590b501707e75b58e484afd1c518cdf3faec3c0f5e698fb354703875d346

@@ -16,6 +16,7 @@ dependencies = [
     "marimo>=0.13",
     "pandas>=2.2",
     "altair>=5.3",
+    "itsdangerous>=2.2.0",
 ]
 
 [project.optional-dependencies]

@@ -31,6 +31,7 @@ class NotebookMeta(BaseModel):
     tags: list[str] = Field(min_length=1)
     sandbox: bool = False
     include_code: bool = False
+    requires_login: bool = False
     session_ttl: int | None = None
     enabled: bool = True
     thumbnail: str = "thumbnail.png"
@@ -46,6 +47,7 @@ class NotebookMeta(BaseModel):
             "description": self.description,
             "tags": self.tags,
             "sandbox": self.sandbox,
+            "requires_login": self.requires_login,
             "mtime": self.mtime,
             "has_thumbnail": self.thumbnail_path is not None,
             "url": f"/apps/{self.slug}/",

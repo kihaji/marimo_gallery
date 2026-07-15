@@ -77,7 +77,26 @@ pod predictably instead of filling the node.
 
 ## Auth
 
-The gateway is unauthenticated in this PoC. Add OIDC either at the ingress
-(e.g. oauth2-proxy) or as ASGI middleware at the marked slot in
-`src/gallery/main.py` — every route including the WebSocket proxy flows
-through that one app. Keep `/healthz` exempt for the probes.
+The gateway ships with username/password login; notebooks marked
+`requires_login: true` are hidden and blocked until sign-in. In Kubernetes,
+mount `users.yaml` and `GALLERY_SECRET_KEY` from a Secret:
+
+```yaml
+env:
+  - name: GALLERY_SECRET_KEY
+    valueFrom: { secretKeyRef: { name: gallery-auth, key: secret-key } }
+  - name: GALLERY_USERS_FILE
+    value: /etc/gallery/users.yaml
+volumeMounts:
+  - { name: users, mountPath: /etc/gallery, readOnly: true }
+volumes:
+  - name: users
+    secret: { secretName: gallery-auth }
+```
+
+With multiple replicas the same `GALLERY_SECRET_KEY` must be set on every pod
+or sessions will only validate on the pod that issued them. For SSO, either
+terminate auth at the ingress (e.g. oauth2-proxy) or swap the `/login` routes
+in `src/gallery/auth.py` for an OIDC flow — every route including the
+WebSocket proxy flows through the same session middleware. Keep `/healthz`
+exempt for the probes.
