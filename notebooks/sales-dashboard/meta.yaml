@@ -3,3 +3,13 @@ description: >
   Interactive revenue dashboard over a synthetic sales dataset: filter by
   date range and region, with weekly trends and per-region breakdowns.
 tags: [dashboard, altair, pandas]
+parameters:
+  - name: region
+    label: Region
+    type: choice
+    default: All
+    choices: [All, North, South, East, West]
+  - name: days
+    label: Days of history
+    type: number
+    default: 90

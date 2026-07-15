@@ -27,6 +27,15 @@ class Settings(BaseSettings):
 
     redis_url: str | None = None
 
+    # Scheduled runs. The scheduler is in-process: with multiple gateway
+    # replicas, enable it on exactly one (schedules_enabled=false elsewhere).
+    schedules_enabled: bool = True
+    schedule_tick_seconds: int = 20
+    schedule_max_concurrent_runs: int = 2
+    schedule_run_timeout_seconds: int = 1800
+    schedule_sandbox_run_timeout_seconds: int = 3600
+    schedule_runs_keep: int = 20
+
     # Authentication. users_file maps usernames to pbkdf2 hashes (generate
     # entries with `uv run python -m gallery.passwd <username>`). Set
     # secret_key in production so sessions survive gateway restarts.

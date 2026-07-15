@@ -22,6 +22,26 @@ from gallery_shared import storage
 logger = logging.getLogger(__name__)
 
 
+async def kill_process_group(proc: asyncio.subprocess.Process, grace_seconds: int) -> None:
+    """SIGTERM the process group, escalate to SIGKILL after a grace period.
+
+    killpg matters: under --sandbox the direct child is a uv wrapper and the
+    real marimo process lives deeper in the group.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        await asyncio.wait_for(proc.wait(), grace_seconds)
+    except asyncio.TimeoutError:
+        os.killpg(pgid, signal.SIGKILL)
+        await proc.wait()
+    except ProcessLookupError:
+        pass
+
+
 class AppState(str, enum.Enum):
     STOPPED = "stopped"
     STARTING = "starting"
@@ -238,20 +258,7 @@ class ProcessManager:
         logger.info("[%s] stopped", slug)
 
     async def _kill(self, proc: asyncio.subprocess.Process) -> None:
-        # killpg: under --sandbox the direct child is a uv wrapper, and the
-        # real marimo server lives deeper in the process group.
-        try:
-            pgid = os.getpgid(proc.pid)
-        except ProcessLookupError:
-            return
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-            await asyncio.wait_for(proc.wait(), self.settings.stop_grace_seconds)
-        except asyncio.TimeoutError:
-            os.killpg(pgid, signal.SIGKILL)
-            await proc.wait()
-        except ProcessLookupError:
-            pass
+        await kill_process_group(proc, self.settings.stop_grace_seconds)
 
     # -- idle reaping ---------------------------------------------------------
 

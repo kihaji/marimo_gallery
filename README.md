@@ -89,6 +89,53 @@ later, replace the `/login` routes in `src/gallery/auth.py` with an OIDC flow
 that sets the same `session["user"]` key — the per-notebook checks are
 unchanged.
 
+## Scheduled runs
+
+Any logged-in user can schedule a notebook from its **Schedules** page (linked
+on every gallery card): pick a cadence — every N hours, daily/weekly at a time,
+or a raw cron expression — fill in the notebook's parameters, and the gateway
+runs `marimo export html` at each fire. Every run produces a **viewable HTML
+report** of all cell outputs plus a captured log, listed in the run history
+with status and duration ("Run now" triggers an immediate run). Sandboxed
+notebooks run with `--sandbox`, and report/run visibility follows the
+notebook's `requires_login` flag.
+
+Schedules and history live in SQLite at `<storage_root>/gallery.db`; artifacts
+under `<storage_root>/runs/<slug>/<run_id>/`. The newest
+`GALLERY_SCHEDULE_RUNS_KEEP` runs are kept per schedule. Cron fires in the
+**server's local timezone** (UTC in the container unless `TZ` is set); missed
+fires while the gateway is down are skipped, not backfilled. A schedule whose
+notebook is still running when it fires again skips that fire.
+
+### Notebook parameters
+
+Declare parameters in `meta.yaml` and they become a form on the Schedules page:
+
+```yaml
+parameters:
+  - name: region          # ^[a-z][a-z0-9_]*$ — passed as --region <value>
+    label: Region
+    type: choice          # string | number | boolean | choice
+    default: All
+    choices: [All, North, South, East, West]
+  - name: days
+    type: number
+    default: 90
+```
+
+Inside the notebook, read them with `mo.cli_args()` and fall back to the UI
+controls so the same notebook works interactively and scheduled:
+
+```python
+cli_args = mo.cli_args()
+region = cli_args.get("region") or region_multiselect.value
+days = int(cli_args.get("days") or 90)
+```
+
+See `notebooks/sales-dashboard/app.py` for the full pattern (including a
+banner cell so exported reports are self-describing). Values are validated
+server-side against the declared types before being stored or passed.
+
 ## Dependency management
 
 Two tiers:
@@ -120,6 +167,9 @@ convenience.
 | `storage.save_upload(name, bytes)` | `uploads/<app>/` | survives reaps; filenames sanitized + collision-safe |
 | `storage.get_cache(ns).get_or_compute(key, fn, ttl)` | `cache/<ns>/` or Redis | cross-session; Redis when `REDIS_URL` is set, disk otherwise, degrades gracefully |
 
+Scheduled-run artifacts live beside these under `runs/<slug>/<run_id>/`, and
+the schedules database is `<storage_root>/gallery.db`.
+
 ## Configuration
 
 Environment variables (prefix `GALLERY_`, see `src/gallery/config.py`):
@@ -134,6 +184,11 @@ Environment variables (prefix `GALLERY_`, see `src/gallery/config.py`):
 | `GALLERY_MARIMO_SESSION_TTL` | `600` | marimo's own per-client session TTL (keep ≤ idle TTL) |
 | `GALLERY_MAX_UPLOAD_BYTES` | `104857600` | HTTP upload cap enforced at the proxy |
 | `GALLERY_PORT_RANGE_START/END` | `10000`/`10999` | internal ports for notebook processes |
+| `GALLERY_SCHEDULES_ENABLED` | `true` | run the in-process scheduler (disable on extra replicas) |
+| `GALLERY_SCHEDULE_TICK_SECONDS` | `20` | how often due schedules are checked |
+| `GALLERY_SCHEDULE_MAX_CONCURRENT_RUNS` | `2` | scheduled/manual runs executing at once |
+| `GALLERY_SCHEDULE_RUN_TIMEOUT_SECONDS` | `1800` | kill a run after this long (`3600` for sandbox via `..._SANDBOX_RUN_...`) |
+| `GALLERY_SCHEDULE_RUNS_KEEP` | `20` | run history kept per schedule |
 | `GALLERY_USERS_FILE` | `users.yaml` | username → password-hash map for login |
 | `GALLERY_SECRET_KEY` | random per boot | session-cookie signing key; set it in production |
 | `GALLERY_SESSION_MAX_AGE_SECONDS` | `28800` | login session lifetime |

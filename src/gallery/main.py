@@ -12,12 +12,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from gallery import auth
+from gallery import auth, schedule_routes
 from gallery.config import settings
+from gallery.db import Database
 from gallery.manager import ProcessManager
 from gallery.proxy import make_http_client
 from gallery.registry import Registry
 from gallery.routes import router
+from gallery.scheduler import Runner, Scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -52,6 +54,12 @@ async def lifespan(app: FastAPI):
     manager.sync(registry.scan())
     manager.start_reaper()
 
+    db = Database(settings.storage_root)
+    scheduler = Scheduler(settings, registry, db, Runner(settings, REPO_ROOT))
+    scheduler.start()
+
+    app.state.db = db
+    app.state.scheduler = scheduler
     app.state.settings = settings
     app.state.users = auth.load_users(users_file)
     app.state.registry = registry
@@ -60,8 +68,10 @@ async def lifespan(app: FastAPI):
     app.state.templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     app.state.tasks = TaskPool()
     yield
+    await scheduler.shutdown()
     await manager.shutdown()
     await app.state.http_client.aclose()
+    db.close()
 
 
 app = FastAPI(title="marimo gallery", lifespan=lifespan)
@@ -89,4 +99,5 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 app.include_router(auth.router)
+app.include_router(schedule_routes.router)
 app.include_router(router)

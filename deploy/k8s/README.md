@@ -63,6 +63,46 @@ service `nb-sales-dashboard`. Then:
 This is the recommended production topology once more than a handful of teams
 share the gallery.
 
+## Scheduled runs
+
+The scheduler runs **in-process in the gateway**. Two consequences:
+
+1. **One active scheduler.** With `replicas: 2+`, every pod would fire every
+   schedule. Set `GALLERY_SCHEDULES_ENABLED=false` on all but one replica
+   (e.g. a separate single-replica "scheduler" Deployment of the same image),
+   or move execution out of the gateway entirely with k8s CronJobs running
+   the same command against the shared volume:
+
+   ```yaml
+   apiVersion: batch/v1
+   kind: CronJob
+   metadata: { name: nightly-sales-report }
+   spec:
+     schedule: "0 2 * * *"
+     jobTemplate:
+       spec:
+         template:
+           spec:
+             containers:
+               - name: run
+                 image: marimo-gallery:latest
+                 command: ["python", "-m", "marimo", "export", "html",
+                           "notebooks/sales-dashboard/app.py",
+                           "-o", "/data/runs/sales-dashboard/manual/report.html",
+                           "--no-include-code", "--",
+                           "--region", "West", "--days", "30"]
+                 volumeMounts: [{ name: data, mountPath: /data }]
+             restartPolicy: Never
+             volumes: [{ name: data, persistentVolumeClaim: { claimName: marimo-gallery-data } }]
+   ```
+
+   (CronJob-produced runs won't appear in the gallery's run history — that
+   requires the in-process scheduler.)
+
+2. **Persist `/data`.** Schedules and run history live in
+   `<storage_root>/gallery.db` with artifacts under `runs/` — use the PVC, not
+   an emptyDir, if schedules must survive pod rescheduling.
+
 ## Storage mapping
 
 | Path under /data | Purpose | Backing |

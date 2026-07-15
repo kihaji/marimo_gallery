@@ -57,3 +57,48 @@ def test_scan_respects_enabled_and_options(tmp_path):
 def test_scan_missing_dir(tmp_path):
     found = Registry(tmp_path / "nope").scan()
     assert found == {}
+
+
+PARAMS = """
+parameters:
+  - name: region
+    label: Region
+    type: choice
+    default: West
+    choices: [North, South, East, West]
+  - name: days
+    type: number
+    default: 90
+  - name: verbose
+    type: boolean
+    default: false
+"""
+
+
+def test_scan_parses_parameters(tmp_path):
+    make_notebook(tmp_path, "with-params", GOOD + PARAMS)
+    meta = Registry(tmp_path).scan()["with-params"]
+    assert [p.name for p in meta.parameters] == ["region", "days", "verbose"]
+    assert meta.parameters[0].choices == ["North", "South", "East", "West"]
+    assert meta.parameters[1].default == 90
+    assert meta.summary()["schedules_url"] == "/schedules/with-params"
+
+
+def test_scan_skips_invalid_parameters(tmp_path):
+    make_notebook(tmp_path, "good", GOOD)
+    make_notebook(
+        tmp_path,
+        "bad-choice",
+        GOOD + "parameters:\n  - name: x\n    type: choice\n    choices: []\n",
+    )
+    make_notebook(
+        tmp_path,
+        "bad-name",
+        GOOD + "parameters:\n  - name: --evil\n",
+    )
+    make_notebook(
+        tmp_path,
+        "bad-default",
+        GOOD + "parameters:\n  - name: n\n    type: number\n    default: hello\n",
+    )
+    assert list(Registry(tmp_path).scan()) == ["good"]

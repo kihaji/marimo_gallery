@@ -15,13 +15,42 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 logger = logging.getLogger(__name__)
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+ParamType = Literal["string", "number", "boolean", "choice"]
+
+
+class NotebookParameter(BaseModel):
+    """A scheduling parameter a notebook accepts via mo.cli_args()."""
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    label: str | None = None
+    type: ParamType = "string"
+    default: str | int | float | bool | None = None
+    choices: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "NotebookParameter":
+        if self.type == "choice":
+            if not self.choices:
+                raise ValueError(f"parameter {self.name!r}: choice type needs choices")
+            if self.default is not None and str(self.default) not in self.choices:
+                raise ValueError(f"parameter {self.name!r}: default not in choices")
+        elif self.choices is not None:
+            raise ValueError(f"parameter {self.name!r}: choices only valid for choice type")
+        if self.default is not None:
+            if self.type == "number" and isinstance(self.default, (bool, str)):
+                raise ValueError(f"parameter {self.name!r}: default must be a number")
+            if self.type == "boolean" and not isinstance(self.default, bool):
+                raise ValueError(f"parameter {self.name!r}: default must be a boolean")
+        return self
 
 
 class NotebookMeta(BaseModel):
@@ -35,6 +64,7 @@ class NotebookMeta(BaseModel):
     session_ttl: int | None = None
     enabled: bool = True
     thumbnail: str = "thumbnail.png"
+    parameters: list[NotebookParameter] = Field(default_factory=list)
 
     app_path: Path
     thumbnail_path: Path | None = None
@@ -51,6 +81,7 @@ class NotebookMeta(BaseModel):
             "mtime": self.mtime,
             "has_thumbnail": self.thumbnail_path is not None,
             "url": f"/apps/{self.slug}/",
+            "schedules_url": f"/schedules/{self.slug}",
         }
 
 

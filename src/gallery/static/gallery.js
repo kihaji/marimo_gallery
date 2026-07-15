@@ -79,6 +79,7 @@ function render() {
       );
       card.querySelector(".badge-sandbox").hidden = !nb.sandbox;
       card.querySelector(".badge-lock").hidden = !nb.requires_login;
+      card.querySelector(".sched-link").href = nb.schedules_url;
       card.querySelector(".open-btn").href = nb.url;
       return card;
     })

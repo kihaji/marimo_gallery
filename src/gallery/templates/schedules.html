@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedules · {{ meta.title }}</title>
+<script>
+  const saved = localStorage.getItem("gallery-theme");
+  document.documentElement.dataset.theme =
+    saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+</script>
+<link rel="stylesheet" href="/static/gallery.css">
+</head>
+<body>
+<header class="topbar">
+  <h1><a class="crumb" href="/">Gallery</a> / {{ meta.title }} · Schedules</h1>
+  <div class="controls">
+    <a class="open-btn" href="/apps/{{ meta.slug }}/" target="_blank" rel="noopener">Open notebook ↗</a>
+    <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
+    {% if user %}
+    <form class="auth" method="post" action="/logout">
+      <span class="user-name">{{ user }}</span>
+      <button type="submit">Log out</button>
+    </form>
+    {% else %}
+    <a class="auth login-link" href="/login?next=/schedules/{{ meta.slug }}">Log in</a>
+    {% endif %}
+  </div>
+</header>
+
+<main class="schedules-main">
+  {% if user %}
+  <section class="panel">
+    <h2>New schedule</h2>
+    <form id="create-form">
+      <div class="field-row">
+        <label>Name <input name="name" required maxlength="100" placeholder="e.g. Nightly refresh"></label>
+        <label>Cadence
+          <select id="cadence-kind">
+            <option value="hours">Every N hours</option>
+            <option value="daily" selected>Daily at…</option>
+            <option value="weekly">Weekly on…</option>
+            <option value="cron">Custom cron</option>
+          </select>
+        </label>
+        <label id="f-every" hidden>Every
+          <select id="cadence-every"></select>
+        </label>
+        <label id="f-weekday" hidden>Day
+          <select id="cadence-weekday">
+            <option value="mon">Monday</option><option value="tue">Tuesday</option>
+            <option value="wed">Wednesday</option><option value="thu">Thursday</option>
+            <option value="fri">Friday</option><option value="sat">Saturday</option>
+            <option value="sun">Sunday</option>
+          </select>
+        </label>
+        <label id="f-time">Time <input id="cadence-time" type="time" value="02:00"></label>
+        <label id="f-cron" hidden>Cron <input id="cadence-cron" placeholder="*/30 * * * *"></label>
+      </div>
+      <p class="muted">Fires <span id="cadence-preview"></span> · server timezone: {{ tz_name }}</p>
+      <div id="param-fields" class="field-row"></div>
+      <p class="error" id="create-error" hidden></p>
+      <button type="submit" class="open-btn">Create schedule</button>
+    </form>
+  </section>
+  {% else %}
+  <p class="auth-hint"><a href="/login?next=/schedules/{{ meta.slug }}">Log in</a> to create schedules or run this notebook.</p>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Schedules</h2>
+    <table class="sched-table" id="schedule-table">
+      <thead><tr><th>Name</th><th>Cadence</th><th>Parameters</th><th>Next run</th><th>Enabled</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted" id="no-schedules" hidden>No schedules yet.</p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Run history</h2>
+      {% if user %}<button id="run-now" class="open-btn" title="Run once with the parameter values above">Run now</button>{% endif %}
+    </div>
+    <table class="sched-table" id="run-table">
+      <thead><tr><th>Started</th><th>Trigger</th><th>Parameters</th><th>Duration</th><th>Status</th><th>Output</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted" id="no-runs" hidden>No runs yet.</p>
+  </section>
+</main>
+
+<script id="sched-data" type="application/json">{{ payload_json | safe }}</script>
+<script src="/static/schedules.js"></script>
+</body>
+</html>

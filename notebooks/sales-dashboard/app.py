@@ -13,7 +13,10 @@ def _():
     from gallery_shared import data, theming
 
     theming.altair_theme()
-    return alt, data, mo, pd
+    # Scheduled runs pass parameters via CLI args (see meta.yaml); interactive
+    # sessions have none and fall back to the UI controls below.
+    cli_args = mo.cli_args()
+    return alt, cli_args, data, mo, pd
 
 
 @app.cell
@@ -40,12 +43,33 @@ def _(mo, sales):
 
 
 @app.cell
-def _(date_range, pd, regions, sales):
-    start, stop = date_range.value
+def _(cli_args, date_range, mo, pd, regions, sales):
+    cli_region = cli_args.get("region")
+    cli_days = cli_args.get("days")
+
+    if cli_days is not None:
+        stop = sales["date"].max()
+        start = stop - pd.Timedelta(days=int(cli_days))
+    else:
+        start, stop = (pd.Timestamp(d) for d in date_range.value)
+
+    if cli_region and cli_region != "All":
+        selected_regions = [cli_region]
+    else:
+        selected_regions = regions.value
+
     filtered = sales[
-        sales["date"].between(pd.Timestamp(start), pd.Timestamp(stop))
-        & sales["region"].isin(regions.value)
+        sales["date"].between(start, stop) & sales["region"].isin(selected_regions)
     ]
+
+    banner = None
+    if cli_region is not None or cli_days is not None:
+        banner = mo.md(
+            f"**Scheduled report** — region: {cli_region or 'All'}, "
+            f"last {cli_days or 'all'} days (generated "
+            f"{pd.Timestamp.now():%Y-%m-%d %H:%M})."
+        ).callout(kind="info")
+    banner
     return (filtered,)
 
 
