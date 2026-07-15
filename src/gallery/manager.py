@@ -56,6 +56,7 @@ class ProcessManager:
         self.repo_root = repo_root
         self.apps: dict[str, ManagedApp] = {}
         self._reaper_task: asyncio.Task | None = None
+        self._closing = False
         self._http = httpx.AsyncClient(timeout=2.0)
 
     # -- registry sync ------------------------------------------------------
@@ -94,7 +95,7 @@ class ProcessManager:
     async def ensure_running(self, slug: str) -> ManagedApp:
         app = self.apps[slug]
         async with app.start_lock:
-            if app.state == AppState.RUNNING:
+            if app.state == AppState.RUNNING or self._closing:
                 return app
             await self._start(app)
             return app
@@ -287,7 +288,15 @@ class ProcessManager:
         return app.last_activity
 
     async def shutdown(self) -> None:
+        self._closing = True
         if self._reaper_task:
             self._reaper_task.cancel()
-        await asyncio.gather(*(self.stop(slug) for slug in list(self.apps)))
+
+        async def stop_when_settled(app: ManagedApp) -> None:
+            # Wait out any in-flight start so it can't resurrect a process
+            # after we've stopped everything.
+            async with app.start_lock:
+                await self.stop(app.slug)
+
+        await asyncio.gather(*(stop_when_settled(a) for a in list(self.apps.values())))
         await self._http.aclose()
