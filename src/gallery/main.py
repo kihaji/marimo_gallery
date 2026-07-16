@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from gallery import schedule_routes
+from gallery import admin_routes, schedule_routes
 from gallery.config import settings
 from gallery.db import Database
 from gallery.manager import ProcessManager
@@ -86,5 +86,6 @@ if settings.dev_user_dn:
     )
 
 app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
+app.include_router(admin_routes.router)
 app.include_router(schedule_routes.router)
 app.include_router(router)

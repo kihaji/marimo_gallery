@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin · Notebook Gallery</title>
+<script>
+  const saved = localStorage.getItem("gallery-theme");
+  document.documentElement.dataset.theme =
+    saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+</script>
+<link rel="stylesheet" href="/static/gallery.css">
+</head>
+<body>
+<header class="topbar">
+  <h1><a class="crumb" href="/">Gallery</a> / Admin</h1>
+  <div class="controls">
+    <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
+    <span class="auth user-name" title="{{ user }}">{{ user_name }}</span>
+  </div>
+</header>
+
+<main class="schedules-main">
+  <p class="auth-hint">Users appear here automatically after their first visit.
+  Groups gate notebook visibility (<code>groups:</code> in meta.yaml) and schedule sharing.</p>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Groups</h2>
+      <form id="group-form" class="field-row">
+        <input id="group-name" placeholder="New group name" maxlength="100" required>
+        <button type="submit" class="open-btn">Create group</button>
+      </form>
+    </div>
+    <p class="error" id="group-error" hidden></p>
+    <table class="sched-table" id="group-table">
+      <thead><tr><th>Name</th><th>Members</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted" id="no-groups" hidden>No groups yet.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Users</h2>
+    <table class="sched-table" id="user-table">
+      <thead><tr><th>User</th><th>DN</th><th>Last seen</th><th>Groups</th><th>Admin</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<script id="admin-data" type="application/json">{{ payload_json | safe }}</script>
+<script src="/static/admin.js"></script>
+</body>
+</html>

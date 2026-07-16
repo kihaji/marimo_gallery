@@ -227,3 +227,7 @@ main { padding: 1.25rem 1.5rem 3rem; }
   border-radius: 8px;
 }
 .open-btn:hover { filter: brightness(1.1); }
+
+/* ---- admin page ---- */
+td.dn { font-family: ui-monospace, monospace; font-size: 0.78rem; color: var(--muted); }
+.member-toggle { display: inline-flex; align-items: center; gap: 0.25rem; margin-right: 0.7rem; white-space: nowrap; }

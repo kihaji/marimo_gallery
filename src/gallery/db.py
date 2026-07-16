@@ -131,6 +131,10 @@ class Database:
         row = self._conn.execute("SELECT * FROM users WHERE dn = ?", (dn,)).fetchone()
         return _row_to_dict(row) if row else None
 
+    def get_user(self, user_id: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return _row_to_dict(row) if row else None
+
     def list_users(self) -> list[dict]:
         rows = self._conn.execute(
             "SELECT users.*, GROUP_CONCAT(groups.name) AS group_names FROM users"
