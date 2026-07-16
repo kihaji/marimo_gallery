@@ -196,8 +196,8 @@ class StubRunner:
     def run_dir(self, slug, run_id) -> Path:
         return self.tmp / "runs" / slug / run_id
 
-    async def run(self, run_id, meta, params):
-        self.calls.append((meta.slug, params))
+    async def run(self, run_id, meta, params, dn):
+        self.calls.append((meta.slug, params, dn))
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         try:
@@ -243,7 +243,7 @@ async def test_tick_fires_due_schedule(tmp_path, registry):
     assert len(runs) == 1
     run = await wait_for_terminal(db, runs[0]["id"])
     assert run["status"] == "success"
-    assert runner.calls == [("sales-dashboard", {"days": 30})]
+    assert runner.calls == [("sales-dashboard", {"days": 30}, "a")]
 
 
 async def test_tick_skips_missing_notebook_and_active_schedule(tmp_path, registry):
@@ -319,6 +319,10 @@ async def test_real_export_run(tmp_path, registry, monkeypatch):
     assert report.is_file() and report.stat().st_size > 10_000
     log_text = (runner.run_dir(meta.slug, run["id"]) / "run.log").read_text()
     assert "--region West" in log_text
+    assert "# on behalf of alice" in log_text
+    # The export subprocess ran with the creator's DN in its environment,
+    # so gallery_shared.identity.current_dn() resolved it in the report.
+    assert "alice" in report.read_text()
 
 
 @pytest.mark.slow
@@ -326,7 +330,7 @@ async def test_real_run_timeout_kills_process(tmp_path, registry):
     settings = Settings(storage_root=tmp_path, schedule_run_timeout_seconds=1)
     runner = Runner(settings, REPO_ROOT)
     meta = registry.notebooks["sales-dashboard"]
-    status, exit_code = await runner.run("f" * 32, meta, {})
+    status, exit_code = await runner.run("f" * 32, meta, {}, "CN=Alice,O=X")
     assert status == "timeout" and exit_code is None
     # No orphaned export processes left behind.
     proc = await asyncio.create_subprocess_exec(

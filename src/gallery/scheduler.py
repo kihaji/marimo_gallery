@@ -179,9 +179,11 @@ class Runner:
     def run_dir(self, slug: str, run_id: str) -> Path:
         return self.settings.storage_root.resolve() / "runs" / slug / run_id
 
-    async def run(self, run_id: str, meta: NotebookMeta, params: dict) -> tuple[str, int | None]:
-        """Execute the notebook; returns (status, exit_code) where status is
-        success | failed | timeout."""
+    async def run(
+        self, run_id: str, meta: NotebookMeta, params: dict, dn: str | None
+    ) -> tuple[str, int | None]:
+        """Execute the notebook on behalf of ``dn`` (the schedule/run creator);
+        returns (status, exit_code) where status is success | failed | timeout."""
         run_dir = self.run_dir(meta.slug, run_id)
         run_dir.mkdir(parents=True, exist_ok=True)
         report = run_dir / "report.html"
@@ -205,6 +207,10 @@ class Runner:
         env = os.environ.copy()
         env["MARIMO_GALLERY_APP"] = meta.slug
         env["GALLERY_STORAGE_ROOT"] = str(self.settings.storage_root.resolve())
+        if dn:
+            # Exports have no HTTP request to read the DN header from;
+            # gallery_shared.identity.current_dn() falls back to this.
+            env["GALLERY_USER_DN"] = dn
         if self.settings.redis_url:
             env["REDIS_URL"] = self.settings.redis_url
         src = str(self.repo_root / "src")
@@ -218,7 +224,8 @@ class Runner:
         with open(run_dir / "run.log", "w") as log:
             log.write(f"# started {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n")
             log.write(f"# command marimo {' '.join(argv[3:])}\n")
-            log.write(f"# params {json.dumps(params)}\n\n")
+            log.write(f"# params {json.dumps(params)}\n")
+            log.write(f"# on behalf of {dn or '(unknown)'}\n\n")
             log.flush()
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -341,7 +348,9 @@ class Scheduler:
                     return
                 self.db.mark_run_started(run_id)
                 try:
-                    status, exit_code = await self.runner.run(run_id, meta, run["params"])
+                    status, exit_code = await self.runner.run(
+                        run_id, meta, run["params"], run["created_by"]
+                    )
                 except asyncio.CancelledError:
                     self.db.mark_run_finished(run_id, "failed", None)
                     raise

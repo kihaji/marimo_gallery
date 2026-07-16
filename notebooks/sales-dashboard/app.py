@@ -10,13 +10,13 @@ def _():
     import marimo as mo
     import pandas as pd
 
-    from gallery_shared import data, theming
+    from gallery_shared import data, identity, theming
 
     theming.altair_theme()
     # Scheduled runs pass parameters via CLI args (see meta.yaml); interactive
     # sessions have none and fall back to the UI controls below.
     cli_args = mo.cli_args()
-    return alt, cli_args, data, mo, pd
+    return alt, cli_args, data, identity, mo, pd
 
 
 @app.cell
@@ -43,9 +43,13 @@ def _(mo, sales):
 
 
 @app.cell
-def _(cli_args, date_range, mo, pd, regions, sales):
+def _(cli_args, date_range, identity, mo, pd, regions, sales):
     cli_region = cli_args.get("region")
     cli_days = cli_args.get("days")
+    # DN of whoever this session/report is for: the x-user-dn header
+    # interactively, GALLERY_USER_DN in scheduled exports. Use it for
+    # on-behalf-of queries and usage logging.
+    user_cn = identity.current_cn()
 
     if cli_days is not None:
         stop = sales["date"].max()
@@ -66,8 +70,8 @@ def _(cli_args, date_range, mo, pd, regions, sales):
     if cli_region is not None or cli_days is not None:
         banner = mo.md(
             f"**Scheduled report** — region: {cli_region or 'All'}, "
-            f"last {cli_days or 'all'} days (generated "
-            f"{pd.Timestamp.now():%Y-%m-%d %H:%M})."
+            f"last {cli_days or 'all'} days, prepared for {user_cn or 'unknown'} "
+            f"(generated {pd.Timestamp.now():%Y-%m-%d %H:%M})."
         ).callout(kind="info")
     banner
     return (filtered,)

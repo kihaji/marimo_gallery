@@ -56,7 +56,7 @@ class StubRunner:
     def run_dir(self, slug, run_id):
         return self.tmp / "runs" / slug / run_id
 
-    async def run(self, run_id, meta, params):
+    async def run(self, run_id, meta, params, dn):
         return self.status, 0
 
 

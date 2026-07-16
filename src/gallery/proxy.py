@@ -17,6 +17,8 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from gallery.auth import current_user
+from gallery.config import settings
 from gallery.manager import ProcessManager
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,17 @@ HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _set_identity_header(headers: dict[str, str], conn) -> None:
+    """Give the notebook the user's DN in GALLERY_DN_HEADER — always set from
+    the resolved identity (so GALLERY_DEV_USER_DN works in dev), never left
+    as whatever arrived. Notebooks read it via gallery_shared.identity."""
+    dn = current_user(conn)
+    if dn:
+        headers[settings.dn_header] = dn
+    else:
+        headers.pop(settings.dn_header, None)
 
 
 def make_http_client() -> httpx.AsyncClient:
@@ -68,6 +81,7 @@ async def proxy_http(
     headers["x-forwarded-for"] = request.client.host if request.client else ""
     headers["x-forwarded-proto"] = request.url.scheme
     headers["x-forwarded-host"] = request.headers.get("host", "")
+    _set_identity_header(headers, request)
 
     upstream = client.build_request(
         request.method, url, headers=headers, content=request.stream()
@@ -99,9 +113,12 @@ async def proxy_ws(
     if websocket.url.query:
         url += f"?{websocket.url.query}"
 
-    headers = {}
+    headers: dict[str, str] = {}
     if cookie := websocket.headers.get("cookie"):
         headers["Cookie"] = cookie
+    # marimo captures the session's request context from this WS connection,
+    # so the DN must ride here too, not just on the HTTP path.
+    _set_identity_header(headers, websocket)
 
     subprotocols = websocket.scope.get("subprotocols") or None
     try:
