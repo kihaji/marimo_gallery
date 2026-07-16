@@ -14,9 +14,9 @@ import re
 import time
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from gallery.auth import current_user
+from gallery.auth import MISSING_IDENTITY_HINT, cn_from_dn, current_user
 from gallery.registry import NotebookMeta
 from gallery.scheduler import (
     ValidationFailure,
@@ -68,13 +68,14 @@ async def schedules_page(request: Request, slug: str):
         return Response("unknown notebook", status_code=404)
     user = current_user(request)
     if user is None:
-        return RedirectResponse(f"/login?next=/schedules/{slug}", status_code=303)
+        return Response(MISSING_IDENTITY_HINT, status_code=401)
     return request.app.state.templates.TemplateResponse(
         request,
         "schedules.html",
         {
             "meta": meta,
             "user": user,
+            "user_name": cn_from_dn(user),
             "tz_name": time.strftime("%Z"),
             "payload_json": json.dumps(_payload(request, meta, user) | {"user": user}),
         },

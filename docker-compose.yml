@@ -5,12 +5,12 @@ services:
       - "8000:8000"
     volumes:
       - gallery-data:/data
-      # Mount your users file to enable login (see users.example.yaml):
-      - ./users.yaml:/app/users.yaml:ro
     environment:
       GALLERY_IDLE_TTL_SECONDS: "900"
-      # Set so login sessions survive container restarts:
-      # GALLERY_SECRET_KEY: change-me
+      # Local identity: no TLS proxy in front of compose, so act as this DN.
+      # In production the proxy sets the x-user-dn header instead.
+      GALLERY_DEV_USER_DN: "CN=Dev User,OU=Local,O=Example"
+      GALLERY_ADMIN_DNS: "CN=Dev User,OU=Local,O=Example"
       # Uncomment when running with the redis profile:
       # REDIS_URL: redis://redis:6379/0
 

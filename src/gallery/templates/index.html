@@ -21,20 +21,11 @@
       <option value="recent">Recently updated</option>
     </select>
     <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
-    {% if user %}
-    <form class="auth" method="post" action="/logout">
-      <span class="user-name">{{ user }}</span>
-      <button type="submit">Log out</button>
-    </form>
-    {% else %}
-    <a class="auth login-link" href="/login">Log in</a>
+    {% if user_name %}
+    <span class="auth user-name" title="{{ user }}">{{ user_name }}</span>
     {% endif %}
   </div>
 </header>
-
-{% if not user %}
-<p class="auth-hint">Some notebooks are only visible after <a href="/login">logging in</a>.</p>
-{% endif %}
 
 <nav id="tagbar" class="tagbar" aria-label="Filter by tag"></nav>
 

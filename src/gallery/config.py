@@ -41,12 +41,15 @@ class Settings(BaseSettings):
     schedule_sandbox_run_timeout_seconds: int = 3600
     schedule_runs_keep: int = 20
 
-    # Authentication. users_file maps usernames to pbkdf2 hashes (generate
-    # entries with `uv run python -m gallery.passwd <username>`). Set
-    # secret_key in production so sessions survive gateway restarts.
-    users_file: Path = Path("users.yaml")
-    secret_key: str | None = None
-    session_max_age_seconds: int = 8 * 3600
+    # Authentication. Identity arrives per-request in a header set by the
+    # TLS-terminating proxy (e.g. Nginx: proxy_set_header X-User-DN
+    # $ssl_client_s_dn). The gateway trusts it unconditionally, so that proxy
+    # must be the only network path to the gateway. dev_user_dn supplies a
+    # fixed identity for local development when the header is absent.
+    dn_header: str = "x-user-dn"
+    dev_user_dn: str | None = None
+    # Comma-separated DNs granted admin on first sight (group management UI).
+    admin_dns: str = ""
 
 
 settings = Settings()

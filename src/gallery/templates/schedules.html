@@ -17,10 +17,7 @@
   <div class="controls">
     <a class="open-btn" href="/apps/{{ meta.slug }}/" target="_blank" rel="noopener">Open notebook ↗</a>
     <button id="theme-toggle" title="Toggle light/dark theme">◐</button>
-    <form class="auth" method="post" action="/logout">
-      <span class="user-name">{{ user }}</span>
-      <button type="submit">Log out</button>
-    </form>
+    <span class="auth user-name" title="{{ user }}">{{ user_name }}</span>
   </div>
 </header>
 

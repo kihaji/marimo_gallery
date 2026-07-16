@@ -12,7 +12,7 @@ from fastapi.responses import (
     Response,
 )
 
-from gallery.auth import current_user
+from gallery.auth import MISSING_IDENTITY_HINT, cn_from_dn, current_user
 from gallery.manager import AppState
 from gallery.proxy import proxy_http, proxy_ws
 from gallery.registry import NotebookMeta
@@ -42,7 +42,11 @@ async def index(request: Request):
     return request.app.state.templates.TemplateResponse(
         request,
         "index.html",
-        {"notebooks_json": json.dumps(_visible_notebooks(request, user)), "user": user},
+        {
+            "notebooks_json": json.dumps(_visible_notebooks(request, user)),
+            "user": user,
+            "user_name": cn_from_dn(user) if user else None,
+        },
     )
 
 
@@ -94,9 +98,7 @@ async def app_http(request: Request, slug: str, path: str):
         and "text/html" in request.headers.get("accept", "")
     )
     if not _authorized(app.meta, current_user(request)):
-        if is_page_load:
-            return RedirectResponse(f"/login?next=/apps/{slug}/", status_code=303)
-        return Response("login required", status_code=401)
+        return Response(MISSING_IDENTITY_HINT, status_code=401)
 
     if app.state != AppState.RUNNING:
         if is_page_load:

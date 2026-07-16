@@ -3,32 +3,39 @@ import asyncio
 import httpx
 import pytest
 
-from gallery import auth
 from gallery.config import settings
 from gallery.main import app
 
+TESTER = "CN=Tester,OU=Engineering,O=Example Corp,C=US"
+OTHER = "CN=Other,OU=Engineering,O=Example Corp,C=US"
+
 
 @pytest.fixture
-async def client(tmp_path, monkeypatch):
+async def gallery(tmp_path, monkeypatch):
+    """Factory for clients acting as a given DN (None = anonymous)."""
     monkeypatch.setenv("GALLERY_STORAGE_ROOT", str(tmp_path))
     monkeypatch.setattr(settings, "storage_root", tmp_path)
-    users_file = tmp_path / "users.yaml"
-    users_file.write_text(
-        f"tester: {auth.hash_password('pw123', iterations=1000)}\n"
-        f"other: {auth.hash_password('pw456', iterations=1000)}\n"
-    )
-    monkeypatch.setattr(settings, "users_file", users_file)
     transport = httpx.ASGITransport(app=app)
+    clients: list[httpx.AsyncClient] = []
+
+    def make(dn: str | None = None) -> httpx.AsyncClient:
+        client = httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={settings.dn_header: dn} if dn else {},
+        )
+        clients.append(client)
+        return client
+
     async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-            yield http
+        yield make
+        for client in clients:
+            await client.aclose()
 
 
-async def login(http, username="tester", password="pw123"):
-    resp = await http.post(
-        "/login", data={"username": username, "password": password, "next": "/"}
-    )
-    assert resp.status_code == 303
+@pytest.fixture
+def client(gallery):
+    return gallery(TESTER)
 
 
 class StubRunner:
@@ -52,12 +59,10 @@ def stub_runner(tmp_path):
 # -- page + read access ---------------------------------------------------------
 
 
-async def test_page_requires_login_even_for_public_notebooks(client):
-    resp = await client.get("/schedules/sales-dashboard")
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/login?next=/schedules/sales-dashboard"
-    assert (await client.get("/api/schedules/sales-dashboard")).status_code == 401
-    await login(client)
+async def test_page_requires_identity_even_for_public_notebooks(gallery, client):
+    anon = gallery()
+    assert (await anon.get("/schedules/sales-dashboard")).status_code == 401
+    assert (await anon.get("/api/schedules/sales-dashboard")).status_code == 401
     resp = await client.get("/schedules/sales-dashboard")
     assert resp.status_code == 200
     assert "sched-data" in resp.text
@@ -68,39 +73,37 @@ async def test_unknown_slug(client):
     assert (await client.get("/api/schedules/nope")).status_code == 404
 
 
-# -- mutations require login ------------------------------------------------------
+# -- mutations require identity ---------------------------------------------------
 
 
-async def test_anonymous_mutations_blocked(client):
+async def test_anonymous_mutations_blocked(gallery, client):
+    anon = gallery()
     assert (
-        await client.post("/api/schedules/sales-dashboard", json={"name": "x"})
+        await anon.post("/api/schedules/sales-dashboard", json={"name": "x"})
     ).status_code == 401
     assert (
-        await client.post("/api/schedules/sales-dashboard/run", json={"params": {}})
+        await anon.post("/api/schedules/sales-dashboard/run", json={"params": {}})
     ).status_code == 401
     assert (
-        await client.patch("/api/schedules/sales-dashboard/1", json={"enabled": False})
+        await anon.patch("/api/schedules/sales-dashboard/1", json={"enabled": False})
     ).status_code == 401
-    await login(client)
     schedule = (
         await client.post(
             "/api/schedules/sales-dashboard",
             json={"name": "s", "cadence": {"kind": "daily", "time": "02:00"}},
         )
     ).json()
-    await client.post("/logout")
     sid = schedule["id"]
     assert (
-        await client.patch(f"/api/schedules/sales-dashboard/{sid}", json={"enabled": False})
+        await anon.patch(f"/api/schedules/sales-dashboard/{sid}", json={"enabled": False})
     ).status_code == 401
-    assert (await client.delete(f"/api/schedules/sales-dashboard/{sid}")).status_code == 401
+    assert (await anon.delete(f"/api/schedules/sales-dashboard/{sid}")).status_code == 401
 
 
 # -- schedule CRUD -----------------------------------------------------------------
 
 
 async def test_create_with_preset_and_cron(client):
-    await login(client)
     resp = await client.post(
         "/api/schedules/sales-dashboard",
         json={
@@ -148,14 +151,12 @@ async def test_create_with_preset_and_cron(client):
     ],
 )
 async def test_create_validation_errors(client, body, fragment):
-    await login(client)
     resp = await client.post("/api/schedules/sales-dashboard", json=body)
     assert resp.status_code == 422
     assert fragment in resp.json()["error"]
 
 
 async def test_disable_enable_delete(client):
-    await login(client)
     row = (
         await client.post(
             "/api/schedules/sales-dashboard",
@@ -181,14 +182,13 @@ async def test_disable_enable_delete(client):
 
 async def test_run_now_and_artifacts(client, tmp_path):
     runner = stub_runner(tmp_path)
-    await login(client)
     resp = await client.post(
         "/api/schedules/sales-dashboard/run", json={"params": {"region": "East"}}
     )
     assert resp.status_code == 200
     run = resp.json()
     assert run["status"] == "queued"
-    assert run["created_by"] == "tester"
+    assert run["created_by"] == TESTER
 
     for _ in range(50):
         listing = (await client.get("/api/schedules/sales-dashboard")).json()
@@ -215,24 +215,22 @@ async def test_run_now_and_artifacts(client, tmp_path):
     assert (await client.get(f"/runs/cluster-lab/{run['id']}/report")).status_code == 404
 
 
-async def test_run_artifacts_require_login(client, tmp_path):
+async def test_run_artifacts_require_identity(gallery, client, tmp_path):
     runner = stub_runner(tmp_path)
-    await login(client)
     run = (await client.post("/api/schedules/csv-explorer/run", json={"params": {}})).json()
     run_dir = runner.run_dir("csv-explorer", run["id"])
     run_dir.mkdir(parents=True)
     (run_dir / "report.html").write_text("<html>secret</html>")
     assert (await client.get(f"/runs/csv-explorer/{run['id']}/report")).status_code == 200
-    await client.post("/logout")
-    assert (await client.get(f"/runs/csv-explorer/{run['id']}/report")).status_code == 401
+    anon = gallery()
+    assert (await anon.get(f"/runs/csv-explorer/{run['id']}/report")).status_code == 401
 
 
 # -- per-user isolation -----------------------------------------------------------
 
 
-async def test_users_cannot_see_or_touch_each_others_schedules(client, tmp_path):
+async def test_users_cannot_see_or_touch_each_others_schedules(gallery, client, tmp_path):
     runner = stub_runner(tmp_path)
-    await login(client)  # tester
     schedule = (
         await client.post(
             "/api/schedules/sales-dashboard",
@@ -257,36 +255,30 @@ async def test_users_cannot_see_or_touch_each_others_schedules(client, tmp_path)
     assert [s["name"] for s in mine["schedules"]] == ["secret nightly"]
     assert [r["id"] for r in mine["runs"]] == [run["id"]]
 
-    # switch user
-    await client.post("/logout")
-    await login(client, "other", "pw456")
-
-    theirs = (await client.get("/api/schedules/sales-dashboard")).json()
+    other = gallery(OTHER)
+    theirs = (await other.get("/api/schedules/sales-dashboard")).json()
     assert theirs["schedules"] == []
     assert theirs["runs"] == []
-    assert "secret nightly" not in (await client.get("/schedules/sales-dashboard")).text
+    assert "secret nightly" not in (await other.get("/schedules/sales-dashboard")).text
 
     sid = schedule["id"]
-    patch = await client.patch(
+    patch = await other.patch(
         f"/api/schedules/sales-dashboard/{sid}", json={"enabled": False}
     )
     assert patch.status_code == 404
-    assert (await client.delete(f"/api/schedules/sales-dashboard/{sid}")).status_code == 404
+    assert (await other.delete(f"/api/schedules/sales-dashboard/{sid}")).status_code == 404
     assert (
-        await client.get(f"/runs/sales-dashboard/{run['id']}/report")
+        await other.get(f"/runs/sales-dashboard/{run['id']}/report")
     ).status_code == 404
-    assert (await client.get(f"/runs/sales-dashboard/{run['id']}/log")).status_code == 404
+    assert (await other.get(f"/runs/sales-dashboard/{run['id']}/log")).status_code == 404
 
     # tester's schedule is untouched
-    await client.post("/logout")
-    await login(client)
     mine = (await client.get("/api/schedules/sales-dashboard")).json()
     assert mine["schedules"][0]["enabled"] is True
 
 
-async def test_scheduled_runs_belong_to_schedule_creator(client, tmp_path):
+async def test_scheduled_runs_belong_to_schedule_creator(gallery, client, tmp_path):
     stub_runner(tmp_path)
-    await login(client)
     schedule = (
         await client.post(
             "/api/schedules/sales-dashboard",
@@ -301,8 +293,7 @@ async def test_scheduled_runs_belong_to_schedule_creator(client, tmp_path):
         if runs and runs[0]["status"] == "success":
             break
         await asyncio.sleep(0.05)
-    assert runs and runs[0]["created_by"] == "tester" and not runs[0]["manual"]
+    assert runs and runs[0]["created_by"] == TESTER and not runs[0]["manual"]
 
-    await client.post("/logout")
-    await login(client, "other", "pw456")
-    assert (await client.get("/api/schedules/sales-dashboard")).json()["runs"] == []
+    other = gallery(OTHER)
+    assert (await other.get("/api/schedules/sales-dashboard")).json()["runs"] == []
