@@ -107,7 +107,7 @@ document.getElementById("group-form").addEventListener("submit", async (e) => {
 
 document.querySelector("#group-table tbody").addEventListener("click", async (e) => {
   const groupId = e.target.dataset?.deleteGroup;
-  if (groupId && confirm("Delete this group? Members are detached and any notebooks or shared schedules gated on it become admin-only.")) {
+  if (groupId && confirm("Delete this group? Members are detached, notebooks gated on it become admin-only, and schedules shared with it become private again.")) {
     await api("DELETE", `/api/admin/groups/${groupId}`);
     await refresh();
   }

@@ -297,6 +297,116 @@ async def test_users_cannot_see_or_touch_each_others_schedules(gallery, client, 
     assert mine["schedules"][0]["enabled"] is True
 
 
+async def test_schedule_sharing_is_view_only_for_group_members(gallery, client, tmp_path):
+    runner = stub_runner(tmp_path)
+    join_group(TESTER, "team")
+    join_group(OTHER, "team")
+    outsider = gallery("CN=Outsider,O=Example Corp")
+    other = gallery(OTHER)
+
+    schedule = (
+        await client.post(
+            "/api/schedules/sales-dashboard",
+            json={
+                "name": "team nightly",
+                "cadence": {"kind": "daily", "time": "02:00"},
+                "params": {"region": "West"},
+            },
+        )
+    ).json()
+    sid = schedule["id"]
+    # One run produced by the schedule itself, one ad-hoc "run now".
+    app.state.db.set_next_run(sid, "2000-01-01T00:00:00+00:00")
+    app.state.scheduler._tick()
+    manual = (
+        await client.post(
+            "/api/schedules/sales-dashboard/run", json={"params": {"region": "West"}}
+        )
+    ).json()
+    for _ in range(50):
+        mine = (await client.get("/api/schedules/sales-dashboard")).json()["runs"]
+        if all(r["status"] == "success" for r in mine):
+            break
+        await asyncio.sleep(0.05)
+    run = next(r for r in mine if r["id"] != manual["id"])
+    run_dir = runner.run_dir("sales-dashboard", run["id"])
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.html").write_text("<html>team report</html>")
+
+    # Not shared yet: invisible to everyone but the owner.
+    assert (await other.get("/api/schedules/sales-dashboard")).json()["schedules"] == []
+
+    # Owner can only share with a group they belong to.
+    group_id = next(
+        g["id"]
+        for g in (await client.get("/api/schedules/sales-dashboard")).json()["my_groups"]
+    )
+    bad = await client.patch(
+        f"/api/schedules/sales-dashboard/{sid}", json={"shared_group_id": 9999}
+    )
+    assert bad.status_code == 422
+    shared = (
+        await client.patch(
+            f"/api/schedules/sales-dashboard/{sid}", json={"shared_group_id": group_id}
+        )
+    ).json()
+    assert shared["shared_group"] == "team" and shared["own"] is True
+
+    # Group member sees the schedule and its runs/artifacts, read-only.
+    # The owner's ad-hoc "run now" (no schedule) stays private to the owner.
+    theirs = (await other.get("/api/schedules/sales-dashboard")).json()
+    row = next(s for s in theirs["schedules"] if s["id"] == sid)
+    assert row["own"] is False and row["shared_group"] == "team"
+    assert [r["id"] for r in theirs["runs"]] == [run["id"]]
+    assert (
+        await other.get(f"/runs/sales-dashboard/{manual['id']}/report")
+    ).status_code == 404
+    assert (await other.get(f"/runs/sales-dashboard/{run['id']}/report")).status_code == 200
+    assert (
+        await other.patch(f"/api/schedules/sales-dashboard/{sid}", json={"enabled": False})
+    ).status_code == 404
+    assert (await other.delete(f"/api/schedules/sales-dashboard/{sid}")).status_code == 404
+    # A member may not re-share or unshare someone else's schedule either.
+    assert (
+        await other.patch(
+            f"/api/schedules/sales-dashboard/{sid}", json={"shared_group_id": None}
+        )
+    ).status_code == 404
+
+    # Outside the group nothing is visible.
+    outsiders = (await outsider.get("/api/schedules/sales-dashboard")).json()
+    assert outsiders["schedules"] == [] and outsiders["runs"] == []
+    assert (
+        await outsider.get(f"/runs/sales-dashboard/{run['id']}/report")
+    ).status_code == 404
+
+    # Unsharing makes it private again.
+    await client.patch(f"/api/schedules/sales-dashboard/{sid}", json={"shared_group_id": None})
+    assert (await other.get("/api/schedules/sales-dashboard")).json()["schedules"] == []
+    assert (await other.get(f"/runs/sales-dashboard/{run['id']}/report")).status_code == 404
+
+
+async def test_deleting_shared_group_reverts_to_private(gallery, client):
+    join_group(TESTER, "team")
+    join_group(OTHER, "team")
+    other = gallery(OTHER)
+    schedule = (
+        await client.post(
+            "/api/schedules/sales-dashboard",
+            json={"name": "s", "cadence": {"kind": "daily", "time": "02:00"}},
+        )
+    ).json()
+    group_id = next(g["id"] for g in app.state.db.list_groups() if g["name"] == "team")
+    await client.patch(
+        f"/api/schedules/sales-dashboard/{schedule['id']}", json={"shared_group_id": group_id}
+    )
+    assert (await other.get("/api/schedules/sales-dashboard")).json()["schedules"] != []
+    app.state.db.delete_group(group_id)
+    assert (await other.get("/api/schedules/sales-dashboard")).json()["schedules"] == []
+    mine = (await client.get("/api/schedules/sales-dashboard")).json()["schedules"]
+    assert mine[0]["shared_group_id"] is None  # ON DELETE SET NULL
+
+
 async def test_scheduled_runs_belong_to_schedule_creator(gallery, client, tmp_path):
     stub_runner(tmp_path)
     schedule = (

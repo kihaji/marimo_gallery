@@ -45,15 +45,19 @@ CREATE TABLE IF NOT EXISTS user_groups (
 );
 
 CREATE TABLE IF NOT EXISTS schedules (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  slug        TEXT NOT NULL,
-  name        TEXT NOT NULL,
-  cron        TEXT NOT NULL,
-  params      TEXT NOT NULL DEFAULT '{}',
-  enabled     INTEGER NOT NULL DEFAULT 1,
-  created_by  TEXT NOT NULL,
-  created_at  TEXT NOT NULL,
-  next_run_at TEXT
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug            TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  cron            TEXT NOT NULL,
+  params          TEXT NOT NULL DEFAULT '{}',
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  created_by      TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  next_run_at     TEXT,
+  -- View-only sharing: members of this group may see the schedule and its
+  -- runs/reports. NULL = private to created_by. Deleting the group makes
+  -- the schedule private again.
+  shared_group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
 
@@ -99,11 +103,16 @@ class Database:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_DDL)
-        # Poor man's migration for databases created before the column existed.
-        try:
-            self._conn.execute("ALTER TABLE runs ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+        # Poor man's migrations for databases created before a column existed.
+        for statement in (
+            "ALTER TABLE runs ADD COLUMN manual INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE schedules ADD COLUMN shared_group_id INTEGER"
+            " REFERENCES groups(id) ON DELETE SET NULL",
+        ):
+            try:
+                self._conn.execute(statement)
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
 
     def close(self) -> None:
@@ -238,6 +247,34 @@ class Database:
         rows = self._conn.execute(query + " ORDER BY id", args).fetchall()
         return [_row_to_dict(r) for r in rows]
 
+    # Subquery for "groups the user identified by dn belongs to" (one ? slot).
+    _MEMBER_GROUPS = (
+        "(SELECT ug.group_id FROM user_groups ug"
+        " JOIN users u ON u.id = ug.user_id WHERE u.dn = ?)"
+    )
+
+    def list_schedules_visible(self, slug: str, dn: str) -> list[dict]:
+        """Schedules the user may see: their own, plus ones shared with a
+        group they belong to. Rows carry own/shared_group/creator_name."""
+        rows = self._conn.execute(
+            "SELECT schedules.*, groups.name AS shared_group,"
+            " creator.display_name AS creator_name FROM schedules"
+            " LEFT JOIN groups ON groups.id = schedules.shared_group_id"
+            " LEFT JOIN users creator ON creator.dn = schedules.created_by"
+            " WHERE slug = ? AND (created_by = ?"
+            f"  OR schedules.shared_group_id IN {self._MEMBER_GROUPS})"
+            " ORDER BY schedules.id",
+            (slug, dn, dn),
+        ).fetchall()
+        return [_row_to_dict(r) | {"own": r["created_by"] == dn} for r in rows]
+
+    def set_shared_group(self, schedule_id: int, group_id: int | None) -> None:
+        self._conn.execute(
+            "UPDATE schedules SET shared_group_id = ? WHERE id = ?",
+            (group_id, schedule_id),
+        )
+        self._conn.commit()
+
     def due_schedules(self, now_utc: str) -> list[dict]:
         rows = self._conn.execute(
             "SELECT * FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL"
@@ -316,6 +353,34 @@ class Database:
             (*args, limit),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+
+    def list_runs_visible(self, slug: str, dn: str, limit: int = 50) -> list[dict]:
+        """Runs the user may see: their own, plus runs of schedules currently
+        shared with a group they belong to (a deleted schedule's runs revert
+        to owner-only via schedule_id ON DELETE SET NULL)."""
+        rows = self._conn.execute(
+            "SELECT runs.*, schedules.name AS schedule_name,"
+            " creator.display_name AS creator_name FROM runs"
+            " LEFT JOIN schedules ON schedules.id = runs.schedule_id"
+            " LEFT JOIN users creator ON creator.dn = runs.created_by"
+            " WHERE runs.slug = ? AND (runs.created_by = ?"
+            f"  OR schedules.shared_group_id IN {self._MEMBER_GROUPS})"
+            " ORDER BY runs.created_at DESC, runs.rowid DESC LIMIT ?",
+            (slug, dn, dn, limit),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def run_accessible(self, run_id: str, dn: str) -> bool:
+        """May the user open this run's artifacts? Owner, or member of the
+        group its schedule is currently shared with."""
+        row = self._conn.execute(
+            "SELECT 1 FROM runs"
+            " LEFT JOIN schedules ON schedules.id = runs.schedule_id"
+            " WHERE runs.id = ? AND (runs.created_by = ?"
+            f"  OR schedules.shared_group_id IN {self._MEMBER_GROUPS})",
+            (run_id, dn, dn),
+        ).fetchone()
+        return row is not None
 
     def has_active_runs(self, slug: str | None = None, created_by: str | None = None) -> bool:
         query = "SELECT 1 FROM runs WHERE status IN ('queued', 'running')"

@@ -63,18 +63,22 @@ def _schedule_view(request: Request, schedule: dict) -> dict:
     return schedule | {"cadence_label": describe_cron(schedule["cron"])}
 
 
-def _payload(request: Request, meta: NotebookMeta, user: str) -> dict:
-    """Everything is filtered to the requesting user's own schedules and runs."""
+def _payload(request: Request, meta: NotebookMeta, ident: Identity) -> dict:
+    """Filtered to what the user may see: their own schedules and runs, plus
+    ones shared (view-only) with a group they belong to."""
     db = request.app.state.db
+    runs = db.list_runs_visible(meta.slug, ident.dn)
     return {
         "slug": meta.slug,
         "title": meta.title,
         "parameters": [p.model_dump() for p in meta.parameters],
         "schedules": [
-            _schedule_view(request, s) for s in db.list_schedules(meta.slug, created_by=user)
+            _schedule_view(request, s) for s in db.list_schedules_visible(meta.slug, ident.dn)
         ],
-        "runs": db.list_runs(meta.slug, created_by=user),
-        "active": db.has_active_runs(meta.slug, created_by=user),
+        "runs": runs,
+        "active": any(r["status"] in ("queued", "running") for r in runs),
+        # Share targets: only groups the owner belongs to.
+        "my_groups": [g for g in db.list_groups() if g["name"] in ident.groups],
     }
 
 
@@ -94,7 +98,7 @@ async def schedules_page(request: Request, slug: str):
             "user": user,
             "user_name": ident.name,
             "tz_name": time.strftime("%Z"),
-            "payload_json": json.dumps(_payload(request, meta, user) | {"user": user}),
+            "payload_json": json.dumps(_payload(request, meta, ident) | {"user": user}),
         },
     )
 
@@ -104,7 +108,7 @@ async def api_list(request: Request, slug: str):
     meta, ident, error = _gate(request, slug)
     if error is not None:
         return error
-    return _payload(request, meta, ident.dn)
+    return _payload(request, meta, ident)
 
 
 @router.post("/api/schedules/{slug}")
@@ -154,7 +158,31 @@ async def api_update(request: Request, slug: str, schedule_id: int):
     if "enabled" in body:
         enabled = bool(body["enabled"])
         db.set_enabled(schedule_id, enabled, next_run_utc(schedule["cron"]) if enabled else None)
-    return _schedule_view(request, db.get_schedule(schedule_id))
+    if "shared_group_id" in body:
+        group_id = body["shared_group_id"]
+        if group_id is not None:
+            names = {g["id"]: g["name"] for g in db.list_groups()}
+            if (
+                isinstance(group_id, bool)
+                or not isinstance(group_id, int)
+                or names.get(group_id) not in ident.groups
+            ):
+                return JSONResponse(
+                    {"error": "you can only share with a group you belong to"},
+                    status_code=422,
+                )
+        db.set_shared_group(schedule_id, group_id)
+        logger.info(
+            "[%s] schedule %s sharing set to group %s by %s",
+            slug,
+            schedule_id,
+            group_id,
+            ident.dn,
+        )
+    updated = next(
+        s for s in db.list_schedules_visible(slug, ident.dn) if s["id"] == schedule_id
+    )
+    return _schedule_view(request, updated)
 
 
 @router.delete("/api/schedules/{slug}/{schedule_id}")
@@ -189,9 +217,11 @@ def _artifact_response(request: Request, slug: str, run_id: str, filename: str, 
         return error if ident is None else Response(status_code=404)
     if not RUN_ID_RE.match(run_id):
         return Response(status_code=404)
-    run = request.app.state.db.get_run(run_id)
-    # Owner-only: run parameters and report contents may be sensitive.
-    if run is None or run["slug"] != slug or run["created_by"] != ident.dn:
+    db = request.app.state.db
+    run = db.get_run(run_id)
+    # Run parameters and report contents may be sensitive: owner-only, unless
+    # the run's schedule is currently shared with a group the user is in.
+    if run is None or run["slug"] != slug or not db.run_accessible(run_id, ident.dn):
         return Response(status_code=404)
     path = request.app.state.scheduler.runner.run_dir(slug, run_id) / filename
     if not path.is_file():

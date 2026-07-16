@@ -2,7 +2,6 @@
 
 let data = JSON.parse(document.getElementById("sched-data").textContent);
 const slug = data.slug;
-const loggedIn = Boolean(data.user);
 
 // ---- cadence controls -------------------------------------------------------
 const kindSel = document.getElementById("cadence-kind");
@@ -119,12 +118,24 @@ function duration(run) {
   return secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
 }
 
+function sharingCell(s) {
+  if (!s.own) return `<span class="muted">shared by ${esc(s.creator_name || s.created_by)}</span>`;
+  if (!data.my_groups.length) return "<span class='muted'>private</span>";
+  const options = ['<option value="">Private</option>'].concat(
+    data.my_groups.map(
+      (g) =>
+        `<option value="${g.id}" ${s.shared_group_id === g.id ? "selected" : ""}>${esc(g.name)}</option>`
+    )
+  );
+  return `<select data-share="${s.id}" title="Share view-only with a group">${options.join("")}</select>`;
+}
+
 function renderSchedules() {
   const tbody = document.querySelector("#schedule-table tbody");
   tbody.replaceChildren(
     ...data.schedules.map((s) => {
       const tr = document.createElement("tr");
-      const actions = loggedIn
+      const actions = s.own
         ? `<button class="mini" data-toggle="${s.id}">${s.enabled ? "Disable" : "Enable"}</button>
            <button class="mini danger" data-delete="${s.id}">Delete</button>`
         : "";
@@ -134,6 +145,7 @@ function renderSchedules() {
         <td>${esc(fmtParams(s.params))}</td>
         <td>${s.enabled ? fmtLocal(s.next_run_at) : "—"}</td>
         <td>${s.enabled ? "on" : "off"}</td>
+        <td>${sharingCell(s)}</td>
         <td class="row-actions">${actions}</td>`;
       return tr;
     })
@@ -146,9 +158,10 @@ function renderRuns() {
   tbody.replaceChildren(
     ...data.runs.map((r) => {
       const tr = document.createElement("tr");
-      const trigger = r.manual
-        ? "manual"
-        : esc(r.schedule_name || "schedule (deleted)");
+      let trigger = r.manual ? "manual" : esc(r.schedule_name || "schedule (deleted)");
+      if (r.created_by !== data.user) {
+        trigger += ` <span class="muted">by ${esc(r.creator_name || r.created_by)}</span>`;
+      }
       const links =
         r.status === "success"
           ? `<a href="/runs/${slug}/${r.id}/report" target="_blank" rel="noopener">Report</a> ·
@@ -241,6 +254,17 @@ if (runNowBtn) {
     await refresh();
   });
 }
+
+document.querySelector("#schedule-table tbody").addEventListener("change", async (e) => {
+  const shareId = e.target.dataset?.share;
+  if (shareId) {
+    const value = e.target.value;
+    await api("PATCH", `/api/schedules/${slug}/${shareId}`, {
+      shared_group_id: value ? Number(value) : null,
+    });
+    await refresh();
+  }
+});
 
 document.querySelector("#schedule-table tbody").addEventListener("click", async (e) => {
   const toggleId = e.target.dataset?.toggle;

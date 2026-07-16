@@ -22,7 +22,8 @@
 </header>
 
 <main class="schedules-main">
-  <p class="auth-hint">Schedules and runs are private — only you can see the ones you create.</p>
+  <p class="auth-hint">Schedules and runs are private to their creator, unless the owner
+  shares a schedule with a group — group members can then view (not edit) it and its reports.</p>
   <section class="panel">
     <h2>New schedule</h2>
     <form id="create-form">
@@ -58,9 +59,9 @@
   </section>
 
   <section class="panel">
-    <h2>Your schedules</h2>
+    <h2>Schedules</h2>
     <table class="sched-table" id="schedule-table">
-      <thead><tr><th>Name</th><th>Cadence</th><th>Parameters</th><th>Next run</th><th>Enabled</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Cadence</th><th>Parameters</th><th>Next run</th><th>Enabled</th><th>Sharing</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
     <p class="muted" id="no-schedules" hidden>No schedules yet.</p>
@@ -68,7 +69,7 @@
 
   <section class="panel">
     <div class="panel-head">
-      <h2>Your runs</h2>
+      <h2>Runs</h2>
       <button id="run-now" class="open-btn" title="Run once with the parameter values above">Run now</button>
     </div>
     <table class="sched-table" id="run-table">
