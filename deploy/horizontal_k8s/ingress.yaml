@@ -1,11 +1,13 @@
 # Path-based routing is what makes the split work:
 #
-#   /schedules, /api/schedules, /runs  ->  scheduler pod (owns gallery.db +
-#                                          run artifacts on its PVC)
-#   everything else                    ->  gateway replicas (stateless)
+#   /schedules, /api/schedules, /runs,  ->  scheduler pod (owns gallery.db —
+#   /admin, /api/admin                      schedules AND users/groups — plus
+#                                           run artifacts on its PVC)
+#   everything else                     ->  gateway replicas (stateless)
 #
-# Gateway replicas each open an EMPTY local gallery.db, so schedule traffic
-# must never land on them — these path rules are load-bearing, not cosmetic.
+# Gateway replicas each open an EMPTY local gallery.db, so schedule and admin
+# traffic must never land on them — these path rules are load-bearing, not
+# cosmetic.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -18,6 +20,17 @@ metadata:
     # Uploads stream through the gateway, which enforces
     # GALLERY_MAX_UPLOAD_BYTES itself (100 MB default).
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    # ---- identity: mandatory client certificates ----
+    # The gallery has no login of its own; it trusts the client-cert DN the
+    # ingress forwards. With ingress-nginx, verifying against your CA makes
+    # the controller send the `ssl-client-subject-dn` header upstream —
+    # matching GALLERY_DN_HEADER in gateway.yaml/scheduler.yaml. If you
+    # terminate TLS in your own Nginx instead, set
+    #   proxy_set_header X-User-DN $ssl_client_s_dn;
+    # there and use GALLERY_DN_HEADER=x-user-dn.
+    nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
+    nginx.ingress.kubernetes.io/auth-tls-secret: "default/gallery-client-ca" # <namespace>/<secret with ca.crt>
+    nginx.ingress.kubernetes.io/auth-tls-verify-depth: "2"
 spec:
   rules:
     - host: gallery.example.com # replace
@@ -32,6 +45,14 @@ spec:
             backend:
               service: { name: gallery-scheduler, port: { number: 80 } }
           - path: /runs
+            pathType: Prefix
+            backend:
+              service: { name: gallery-scheduler, port: { number: 80 } }
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service: { name: gallery-scheduler, port: { number: 80 } }
+          - path: /api/admin
             pathType: Prefix
             backend:
               service: { name: gallery-scheduler, port: { number: 80 } }

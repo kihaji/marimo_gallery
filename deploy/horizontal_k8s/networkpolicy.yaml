@@ -1,4 +1,4 @@
-# The notebook pods themselves are unauthenticated — requires_login is
+# The notebook pods themselves are unauthenticated — login/group gating is
 # enforced at the gateway proxy. This policy makes the gateway the only way
 # in, so nothing else in the cluster can hit a protected notebook directly.
 # (Requires a CNI that enforces NetworkPolicy, e.g. Calico or Cilium.)
@@ -18,3 +18,27 @@ spec:
               app: gallery-gateway
       ports:
         - port: 2718
+---
+# LOAD-BEARING for auth: the gateway and scheduler trust the DN header
+# blindly, so only the ingress controller may reach them — any pod that can
+# hit :8000 directly can claim any identity by setting the header itself.
+# Adjust the namespaceSelector to match how your ingress controller's
+# namespace is labeled (this matches the ingress-nginx default).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gallery-from-ingress-only
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [gallery-gateway, gallery-scheduler]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8000

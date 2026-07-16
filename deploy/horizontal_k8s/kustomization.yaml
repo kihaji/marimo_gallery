@@ -1,5 +1,6 @@
 # kubectl apply -k deploy/horizontal_k8s/
-# Create the gallery-auth Secret first (see secret.example.yaml).
+# Create the client-CA secret referenced by ingress.yaml first:
+#   kubectl create secret generic gallery-client-ca --from-file=ca.crt=your-ca.pem
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

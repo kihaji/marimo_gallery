@@ -132,26 +132,32 @@ pod predictably instead of filling the node.
 
 ## Auth
 
-The gateway ships with username/password login; notebooks marked
-`requires_login: true` are hidden and blocked until sign-in. In Kubernetes,
-mount `users.yaml` and `GALLERY_SECRET_KEY` from a Secret:
+Identity is the **client-certificate DN** forwarded per-request in
+`GALLERY_DN_HEADER` — there are no passwords, sessions, or shared keys, so
+nothing auth-related needs to be synchronized between replicas. Two pieces
+must be in place:
 
-```yaml
-env:
-  - name: GALLERY_SECRET_KEY
-    valueFrom: { secretKeyRef: { name: gallery-auth, key: secret-key } }
-  - name: GALLERY_USERS_FILE
-    value: /etc/gallery/users.yaml
-volumeMounts:
-  - { name: users, mountPath: /etc/gallery, readOnly: true }
-volumes:
-  - name: users
-    secret: { secretName: gallery-auth }
-```
+1. **The ingress terminates TLS with mandatory client certs and injects the
+   DN.** With ingress-nginx, CA verification makes the controller forward
+   `ssl-client-subject-dn` upstream:
 
-With multiple replicas the same `GALLERY_SECRET_KEY` must be set on every pod
-or sessions will only validate on the pod that issued them. For SSO, either
-terminate auth at the ingress (e.g. oauth2-proxy) or swap the `/login` routes
-in `src/gallery/auth.py` for an OIDC flow — every route including the
-WebSocket proxy flows through the same session middleware. Keep `/healthz`
-exempt for the probes.
+   ```yaml
+   nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
+   nginx.ingress.kubernetes.io/auth-tls-secret: "default/gallery-client-ca"
+   ```
+
+   and the gallery pods set `GALLERY_DN_HEADER=ssl-client-subject-dn`. If
+   your own Nginx fronts the cluster instead, keep the default
+   `x-user-dn` and configure `proxy_set_header X-User-DN $ssl_client_s_dn;`.
+
+2. **Only the ingress may reach the gallery pods.** The header is trusted
+   blindly; a NetworkPolicy restricting ingress to the controller's namespace
+   is load-bearing for auth, not hygiene (see
+   [`../horizontal_k8s/networkpolicy.yaml`](../horizontal_k8s/networkpolicy.yaml)).
+
+Accounts are auto-created on first sight of a DN; set `GALLERY_ADMIN_DNS`
+(semicolon-separated) to bootstrap admins, who manage groups at `/admin`.
+Users, groups, and membership live in `gallery.db` on the pod's volume —
+fine for this single-pod topology; see the horizontal README for what that
+means with replicated gateways. Keep `/healthz` unauthenticated for probes
+(it already is).

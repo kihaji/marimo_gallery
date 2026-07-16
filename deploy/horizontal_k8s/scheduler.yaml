@@ -40,11 +40,12 @@ spec:
               value: "http://nb-{slug}:2718"
             - name: GALLERY_SCHEDULE_MAX_CONCURRENT_RUNS
               value: "2"
-            - name: GALLERY_SECRET_KEY
-              valueFrom:
-                secretKeyRef: { name: gallery-auth, key: secret-key }
-            - name: GALLERY_USERS_FILE
-              value: /etc/gallery/users.yaml
+            # Keep identical to the gateway: schedule/admin requests arrive
+            # here through the same ingress.
+            - name: GALLERY_DN_HEADER
+              value: "ssl-client-subject-dn"
+            - name: GALLERY_ADMIN_DNS
+              value: "CN=Your Admin,OU=IT,O=Example" # semicolon-separated
             # - name: REDIS_URL
             #   valueFrom:
             #     secretKeyRef: { name: gallery-redis, key: url }
@@ -62,15 +63,14 @@ spec:
             requests: { cpu: 500m, memory: 1Gi }
             limits: { cpu: "2", memory: 4Gi }
           volumeMounts:
-            # gallery.db + runs/<slug>/<run_id>/ artifacts + the uv cache for
-            # sandboxed exports. Must persist: this IS the schedule store.
+            # gallery.db (schedules + users/groups) + runs/<slug>/<run_id>/
+            # artifacts + the uv cache for sandboxed exports. Must persist:
+            # this IS the schedule and account store, which is why the
+            # ingress routes /admin here too.
             - { name: data, mountPath: /data }
-            - { name: users, mountPath: /etc/gallery, readOnly: true }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: gallery-scheduler-data }
-        - name: users
-          secret: { secretName: gallery-auth, items: [{ key: users.yaml, path: users.yaml }] }
 ---
 apiVersion: v1
 kind: Service

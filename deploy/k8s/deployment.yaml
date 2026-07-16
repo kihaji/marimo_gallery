@@ -24,6 +24,13 @@ spec:
           env:
             - name: GALLERY_IDLE_TTL_SECONDS
               value: "900"
+            # Identity: the DN header your TLS-terminating ingress injects
+            # (see the Auth section in README.md). With ingress-nginx
+            # client-cert verification, the header is ssl-client-subject-dn.
+            - name: GALLERY_DN_HEADER
+              value: "ssl-client-subject-dn" # or x-user-dn from your own Nginx
+            - name: GALLERY_ADMIN_DNS
+              value: "CN=Your Admin,OU=IT,O=Example" # semicolon-separated
             # - name: REDIS_URL
             #   valueFrom:
             #     secretKeyRef: { name: gallery-redis, key: url }

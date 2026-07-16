@@ -25,10 +25,14 @@ Browser ──> FastAPI gateway :8000
 
 ```bash
 uv sync --extra redis          # or plain `uv sync`
+# No TLS proxy locally, so supply a fixed identity (see Authentication below):
+export GALLERY_DEV_USER_DN="CN=Dev User,OU=Local,O=Example"
+export GALLERY_ADMIN_DNS="$GALLERY_DEV_USER_DN"   # optional: make yourself admin
 uv run uvicorn gallery.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open http://localhost:8000. Run tests with `uv run pytest` (add `-m slow` for
+Open http://localhost:8000. Without `GALLERY_DEV_USER_DN` you browse
+anonymously: only public notebooks are visible and the schedule pages 401. Run tests with `uv run pytest` (add `-m slow` for
 the full subprocess lifecycle test).
 
 ### Docker
@@ -61,7 +65,8 @@ description: What it does.    # required
 tags: [team-x, dashboard]     # required, at least one
 sandbox: false                # true = run with `marimo run --sandbox` (see below)
 include_code: false           # true = users can view notebook source
-requires_login: false         # true = hidden from the index and blocked until login
+requires_login: false         # true = hidden/blocked unless the request has an identity
+groups: [analytics]           # restrict to these groups (implies login; admins always pass)
 session_ttl: 600              # optional marimo --session-ttl override
 enabled: true                 # false hides it from the gallery
 ```
@@ -69,25 +74,51 @@ enabled: true                 # false hides it from the gallery
 The directory name is the slug (`[a-z0-9-]`, becomes the URL). Broken entries
 are logged and skipped — they never take the gallery down.
 
-## Authentication
+## Authentication & authorization
 
-Username/password login with signed-cookie sessions. Notebooks with
-`requires_login: true` are hidden from the gallery index and blocked at the
-proxy (HTTP and WebSocket) until the user logs in; everything else stays
-public. The example `csv-explorer` notebook is protected.
+There are no passwords and no sessions. Identity is the **client-certificate
+DN** your TLS-terminating proxy forwards on every request in the
+`GALLERY_DN_HEADER` header (default `x-user-dn`):
 
-Users live in `users.yaml` (gitignored) as PBKDF2 hashes:
-
-```bash
-cp users.example.yaml users.yaml            # demo user: demo / demo1234 — replace it
-uv run python -m gallery.passwd alice >> users.yaml
+```nginx
+# Nginx terminating SSL with mandatory client certs:
+proxy_set_header X-User-DN $ssl_client_s_dn;
 ```
 
-Set `GALLERY_SECRET_KEY` in production so sessions survive gateway restarts
-(in Kubernetes, mount it and `users.yaml` from a Secret). To move to SSO
-later, replace the `/login` routes in `src/gallery/auth.py` with an OIDC flow
-that sets the same `session["user"]` key — the per-notebook checks are
-unchanged.
+**Trust model.** The gateway trusts that header unconditionally, so the proxy
+must be the only network path to the gateway (in Kubernetes: a NetworkPolicy
+admitting only ingress-controller traffic), and the proxy must always *set*
+the header — never forward a client-supplied value. For local development
+without a proxy, set `GALLERY_DEV_USER_DN` to act as a fixed user (used only
+when the header is absent; a startup warning is logged).
+
+**Accounts and groups.** A user row is created automatically the first time
+a DN appears; users, groups, and membership live in `gallery.db` (the layer
+is kept behind `src/gallery/db.py` for a later move to Postgres). Notebooks
+declare `groups: [...]` in meta.yaml to restrict visibility to members —
+authenticated non-members get 404s, so gated notebooks stay invisible —
+while `requires_login: true` admits any authenticated user. The example
+`csv-explorer` notebook is gated on the `analytics` group.
+
+**Admins.** DNs listed in `GALLERY_ADMIN_DNS` (semicolon-separated — DNs
+contain commas) become admins on first sight. Admins see every notebook and
+get the `/admin` page: create groups, manage membership, grant or revoke
+admin (revoking your own is blocked; env-granted admin is removed by editing
+the env var). The page 404s for everyone else.
+
+**User identity in notebooks.** The gateway forwards the DN to the notebook
+backend on both the HTTP and WebSocket proxy paths, and scheduled exports
+receive the schedule creator's DN as `GALLERY_USER_DN` in their environment.
+Notebook code reads it with one call that works in both modes:
+
+```python
+from gallery_shared import identity
+
+dn = identity.current_dn()   # full DN — for on-behalf-of calls, usage logging
+who = identity.current_cn()  # display-friendly CN
+```
+
+See the banner cell in `notebooks/sales-dashboard/app.py`.
 
 ## Scheduled runs
 
@@ -99,12 +130,17 @@ report** of all cell outputs plus a captured log, listed in the run history
 with status and duration ("Run now" triggers an immediate run). Sandboxed
 notebooks run with `--sandbox`.
 
-**Schedules are private.** Parameters (and the reports they produce) may be
-sensitive, so users only see, edit, delete, and run their own schedules, and
-run history/reports are visible only to their creator — scheduled runs belong
-to whoever created the schedule, even after the schedule is deleted. The
-schedules pages therefore always require login, including for notebooks that
-are otherwise public.
+**Schedules are private, with opt-in sharing.** Parameters (and the reports
+they produce) may be sensitive, so by default users only see, edit, delete,
+and run their own schedules, and run history/reports are visible only to
+their creator — scheduled runs belong to whoever created the schedule, even
+after the schedule is deleted. An owner may share a schedule **view-only**
+with one of their groups: members then see the schedule and the runs it
+produced (reports and logs included) but cannot edit, delete, run, or
+re-share it, and the owner's ad-hoc "Run now" runs stay private. Deleting the
+group reverts its shared schedules to private. The schedules pages always
+require an identity, and scheduling a notebook requires the same group access
+as opening it.
 
 Schedules and history live in SQLite at `<storage_root>/gallery.db`; artifacts
 under `<storage_root>/runs/<slug>/<run_id>/`. The newest
@@ -196,9 +232,9 @@ Environment variables (prefix `GALLERY_`, see `src/gallery/config.py`):
 | `GALLERY_SCHEDULE_MAX_CONCURRENT_RUNS` | `2` | scheduled/manual runs executing at once |
 | `GALLERY_SCHEDULE_RUN_TIMEOUT_SECONDS` | `1800` | kill a run after this long (`3600` for sandbox via `..._SANDBOX_RUN_...`) |
 | `GALLERY_SCHEDULE_RUNS_KEEP` | `20` | run history kept per schedule |
-| `GALLERY_USERS_FILE` | `users.yaml` | username → password-hash map for login |
-| `GALLERY_SECRET_KEY` | random per boot | session-cookie signing key; set it in production |
-| `GALLERY_SESSION_MAX_AGE_SECONDS` | `28800` | login session lifetime |
+| `GALLERY_DN_HEADER` | `x-user-dn` | header the TLS-terminating proxy sets to the client-cert DN |
+| `GALLERY_DEV_USER_DN` | unset | dev-only fixed identity when the header is absent — never set in production |
+| `GALLERY_ADMIN_DNS` | unset | semicolon-separated DNs granted admin on first sight |
 | `REDIS_URL` | unset | enables the Redis cache backend |
 
 ## Scaling under load
@@ -214,10 +250,10 @@ example including the dedicated scheduler pod is in
 
 ## Security notes for production
 
-- Set `GALLERY_SECRET_KEY`, replace the demo user, and serve over TLS —
-  session cookies and passwords are only as safe as the transport. The login
-  form has no CSRF token or rate limiting yet; add both (or move auth to your
-  ingress/SSO) before exposing beyond a trusted network.
+- The DN header is trusted blindly, so lock the network path: only the
+  TLS-terminating proxy may reach the gateway, the proxy must require client
+  certificates and always overwrite the header, and `GALLERY_DEV_USER_DN`
+  must never be set. Anyone who can reach the gateway directly can be anyone.
 - `include_code: false` (the default) keeps notebook source off the client.
 - Notebook code runs with the gateway's privileges — treat the notebooks
   directory as code review territory, and run the container as the provided
