@@ -16,8 +16,9 @@ import time
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from gallery.auth import MISSING_IDENTITY_HINT, cn_from_dn, current_user
+from gallery.auth import MISSING_IDENTITY_HINT, Identity, identify
 from gallery.registry import NotebookMeta
+from gallery.routes import _authorized
 from gallery.scheduler import (
     ValidationFailure,
     compile_cadence,
@@ -42,6 +43,22 @@ def _login_required() -> JSONResponse:
     return JSONResponse({"error": "login required"}, status_code=401)
 
 
+def _gate(
+    request: Request, slug: str
+) -> tuple[NotebookMeta | None, Identity | None, JSONResponse | None]:
+    """(meta, identity, error): scheduling a notebook requires the same group
+    access as opening it — unknown and unauthorized slugs both 404."""
+    meta = _meta_or_none(request, slug)
+    if meta is None:
+        return None, None, JSONResponse({"error": "unknown notebook"}, status_code=404)
+    ident = identify(request)
+    if ident is None:
+        return meta, None, _login_required()
+    if not _authorized(meta, ident):
+        return meta, ident, JSONResponse({"error": "unknown notebook"}, status_code=404)
+    return meta, ident, None
+
+
 def _schedule_view(request: Request, schedule: dict) -> dict:
     return schedule | {"cadence_label": describe_cron(schedule["cron"])}
 
@@ -63,19 +80,19 @@ def _payload(request: Request, meta: NotebookMeta, user: str) -> dict:
 
 @router.get("/schedules/{slug}", response_class=HTMLResponse)
 async def schedules_page(request: Request, slug: str):
-    meta = _meta_or_none(request, slug)
-    if meta is None:
-        return Response("unknown notebook", status_code=404)
-    user = current_user(request)
-    if user is None:
-        return Response(MISSING_IDENTITY_HINT, status_code=401)
+    meta, ident, error = _gate(request, slug)
+    if error is not None:
+        if ident is None and meta is not None:
+            return Response(MISSING_IDENTITY_HINT, status_code=401)
+        return Response("unknown notebook", status_code=error.status_code)
+    user = ident.dn
     return request.app.state.templates.TemplateResponse(
         request,
         "schedules.html",
         {
             "meta": meta,
             "user": user,
-            "user_name": cn_from_dn(user),
+            "user_name": ident.name,
             "tz_name": time.strftime("%Z"),
             "payload_json": json.dumps(_payload(request, meta, user) | {"user": user}),
         },
@@ -84,23 +101,18 @@ async def schedules_page(request: Request, slug: str):
 
 @router.get("/api/schedules/{slug}")
 async def api_list(request: Request, slug: str):
-    meta = _meta_or_none(request, slug)
-    if meta is None:
-        return JSONResponse({"error": "unknown notebook"}, status_code=404)
-    user = current_user(request)
-    if user is None:
-        return _login_required()
-    return _payload(request, meta, user)
+    meta, ident, error = _gate(request, slug)
+    if error is not None:
+        return error
+    return _payload(request, meta, ident.dn)
 
 
 @router.post("/api/schedules/{slug}")
 async def api_create(request: Request, slug: str):
-    meta = _meta_or_none(request, slug)
-    if meta is None:
-        return JSONResponse({"error": "unknown notebook"}, status_code=404)
-    user = current_user(request)
-    if user is None:
-        return _login_required()
+    meta, ident, error = _gate(request, slug)
+    if error is not None:
+        return error
+    user = ident.dn
     body = await request.json()
     try:
         if body.get("cron"):
@@ -123,8 +135,6 @@ async def api_create(request: Request, slug: str):
 def _owned_schedule(request: Request, slug: str, schedule_id: int, user: str | None):
     """The schedule, only if it exists for this slug AND belongs to the user.
     Others' schedules 404 rather than 403 so their existence isn't leaked."""
-    if request.app.state.registry.notebooks.get(slug) is None:
-        return None
     schedule = request.app.state.db.get_schedule(schedule_id)
     if schedule is None or schedule["slug"] != slug or schedule["created_by"] != user:
         return None
@@ -133,11 +143,11 @@ def _owned_schedule(request: Request, slug: str, schedule_id: int, user: str | N
 
 @router.patch("/api/schedules/{slug}/{schedule_id}")
 async def api_update(request: Request, slug: str, schedule_id: int):
-    user = current_user(request)
-    if user is None:
-        return _login_required()
+    _, ident, error = _gate(request, slug)
+    if error is not None:
+        return error
     db = request.app.state.db
-    schedule = _owned_schedule(request, slug, schedule_id, user)
+    schedule = _owned_schedule(request, slug, schedule_id, ident.dn)
     if schedule is None:
         return JSONResponse({"error": "unknown schedule"}, status_code=404)
     body = await request.json()
@@ -149,43 +159,39 @@ async def api_update(request: Request, slug: str, schedule_id: int):
 
 @router.delete("/api/schedules/{slug}/{schedule_id}")
 async def api_delete(request: Request, slug: str, schedule_id: int):
-    user = current_user(request)
-    if user is None:
-        return _login_required()
-    schedule = _owned_schedule(request, slug, schedule_id, user)
+    _, ident, error = _gate(request, slug)
+    if error is not None:
+        return error
+    schedule = _owned_schedule(request, slug, schedule_id, ident.dn)
     if schedule is None:
         return JSONResponse({"error": "unknown schedule"}, status_code=404)
     request.app.state.db.delete_schedule(schedule_id)
-    logger.info("[%s] schedule %s deleted by %s", slug, schedule_id, user)
+    logger.info("[%s] schedule %s deleted by %s", slug, schedule_id, ident.dn)
     return {"deleted": schedule_id}
 
 
 @router.post("/api/schedules/{slug}/run")
 async def api_run_now(request: Request, slug: str):
-    meta = _meta_or_none(request, slug)
-    if meta is None:
-        return JSONResponse({"error": "unknown notebook"}, status_code=404)
-    user = current_user(request)
-    if user is None:
-        return _login_required()
+    meta, ident, error = _gate(request, slug)
+    if error is not None:
+        return error
     body = await request.json()
     try:
         params = validate_params(meta.parameters, body.get("params") or {})
     except ValidationFailure as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
-    return request.app.state.scheduler.run_now(meta, params, user)
+    return request.app.state.scheduler.run_now(meta, params, ident.dn)
 
 
 def _artifact_response(request: Request, slug: str, run_id: str, filename: str, media_type=None):
-    user = current_user(request)
-    if user is None:
-        return _login_required()
-    meta = _meta_or_none(request, slug)
-    if meta is None or not RUN_ID_RE.match(run_id):
+    _, ident, error = _gate(request, slug)
+    if error is not None:
+        return error if ident is None else Response(status_code=404)
+    if not RUN_ID_RE.match(run_id):
         return Response(status_code=404)
     run = request.app.state.db.get_run(run_id)
     # Owner-only: run parameters and report contents may be sensitive.
-    if run is None or run["slug"] != slug or run["created_by"] != user:
+    if run is None or run["slug"] != slug or run["created_by"] != ident.dn:
         return Response(status_code=404)
     path = request.app.state.scheduler.runner.run_dir(slug, run_id) / filename
     if not path.is_file():

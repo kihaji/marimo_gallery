@@ -24,6 +24,26 @@ logger = logging.getLogger(__name__)
 RUN_STATUSES = ("queued", "running", "success", "failed", "timeout")
 
 _DDL = """
+CREATE TABLE IF NOT EXISTS users (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  dn           TEXT NOT NULL UNIQUE,
+  display_name TEXT,
+  is_admin     INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+  id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS user_groups (
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, group_id)
+);
+
 CREATE TABLE IF NOT EXISTS schedules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   slug        TEXT NOT NULL,
@@ -63,8 +83,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     record = dict(row)
     if "params" in record:
         record["params"] = json.loads(record["params"])
-    if "enabled" in record:
-        record["enabled"] = bool(record["enabled"])
+    for flag in ("enabled", "is_admin"):
+        if flag in record:
+            record[flag] = bool(record[flag])
     return record
 
 
@@ -87,6 +108,92 @@ class Database:
 
     def close(self) -> None:
         self._conn.close()
+
+    # -- users & groups ---------------------------------------------------------
+
+    def upsert_user(self, dn: str, display_name: str, make_admin: bool = False) -> dict:
+        """Create the user on first sight; refresh last_seen_at afterwards.
+        make_admin (the GALLERY_ADMIN_DNS bootstrap) only ever grants — admin
+        given through the UI survives, env-granted admin is revoked by
+        removing the DN from the env var."""
+        now = utcnow()
+        self._conn.execute(
+            "INSERT INTO users (dn, display_name, is_admin, created_at, last_seen_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(dn) DO UPDATE SET last_seen_at = excluded.last_seen_at,"
+            " is_admin = MAX(users.is_admin, excluded.is_admin)",
+            (dn, display_name, int(make_admin), now, now),
+        )
+        self._conn.commit()
+        return self.get_user_by_dn(dn)
+
+    def get_user_by_dn(self, dn: str) -> dict | None:
+        row = self._conn.execute("SELECT * FROM users WHERE dn = ?", (dn,)).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT users.*, GROUP_CONCAT(groups.name) AS group_names FROM users"
+            " LEFT JOIN user_groups ON user_groups.user_id = users.id"
+            " LEFT JOIN groups ON groups.id = user_groups.group_id"
+            " GROUP BY users.id ORDER BY users.dn"
+        ).fetchall()
+        users = []
+        for row in rows:
+            user = _row_to_dict(row)
+            names = user.pop("group_names")
+            user["groups"] = sorted(names.split(",")) if names else []
+            users.append(user)
+        return users
+
+    def set_admin(self, user_id: int, is_admin: bool) -> None:
+        self._conn.execute(
+            "UPDATE users SET is_admin = ? WHERE id = ?", (int(is_admin), user_id)
+        )
+        self._conn.commit()
+
+    def groups_of(self, dn: str) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT groups.name FROM groups"
+            " JOIN user_groups ON user_groups.group_id = groups.id"
+            " JOIN users ON users.id = user_groups.user_id WHERE users.dn = ?",
+            (dn,),
+        ).fetchall()
+        return {r["name"] for r in rows}
+
+    def create_group(self, name: str) -> dict | None:
+        """The new group, or None if the name is taken."""
+        try:
+            cur = self._conn.execute("INSERT INTO groups (name) VALUES (?)", (name,))
+        except sqlite3.IntegrityError:
+            return None
+        self._conn.commit()
+        return {"id": cur.lastrowid, "name": name}
+
+    def delete_group(self, group_id: int) -> None:
+        self._conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
+        self._conn.commit()
+
+    def list_groups(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT groups.*, COUNT(user_groups.user_id) AS member_count FROM groups"
+            " LEFT JOIN user_groups ON user_groups.group_id = groups.id"
+            " GROUP BY groups.id ORDER BY groups.name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_membership(self, user_id: int, group_id: int, member: bool) -> None:
+        if member:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)",
+                (user_id, group_id),
+            )
+        else:
+            self._conn.execute(
+                "DELETE FROM user_groups WHERE user_id = ? AND group_id = ?",
+                (user_id, group_id),
+            )
+        self._conn.commit()
 
     # -- schedules ------------------------------------------------------------
 

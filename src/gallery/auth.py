@@ -13,6 +13,8 @@ identity used whenever the header is absent.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from starlette.requests import HTTPConnection
 
 from gallery.config import settings
@@ -37,3 +39,39 @@ def cn_from_dn(dn: str) -> str:
         if key.strip().upper() == "CN" and value.strip():
             return value.strip()
     return dn
+
+
+def bootstrap_admin_dns() -> set[str]:
+    # Semicolon-separated: DNs themselves contain commas.
+    return {dn.strip() for dn in settings.admin_dns.split(";") if dn.strip()}
+
+
+@dataclass(frozen=True)
+class Identity:
+    dn: str
+    name: str
+    is_admin: bool
+    groups: frozenset[str]
+
+
+def identify(conn: HTTPConnection) -> Identity | None:
+    """The requesting user with their groups, auto-provisioned on first sight.
+
+    The user row is created once per DN per process (``app.state.known_dns``
+    suppresses repeat writes); admin flag and group membership are read fresh
+    every time so changes made in the admin UI apply immediately.
+    """
+    dn = current_user(conn)
+    if dn is None:
+        return None
+    state = conn.app.state
+    if dn not in state.known_dns:
+        state.db.upsert_user(dn, cn_from_dn(dn), make_admin=dn in bootstrap_admin_dns())
+        state.known_dns.add(dn)
+    user = state.db.get_user_by_dn(dn)
+    return Identity(
+        dn=dn,
+        name=user["display_name"] or cn_from_dn(dn),
+        is_admin=user["is_admin"],
+        groups=frozenset(state.db.groups_of(dn)),
+    )

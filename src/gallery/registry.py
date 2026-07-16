@@ -61,6 +61,9 @@ class NotebookMeta(BaseModel):
     sandbox: bool = False
     include_code: bool = False
     requires_login: bool = False
+    # Restrict visibility to members of any of these groups (implies login;
+    # admins always qualify). Empty = governed by requires_login alone.
+    groups: list[str] = Field(default_factory=list)
     session_ttl: int | None = None
     enabled: bool = True
     thumbnail: str = "thumbnail.png"
@@ -77,7 +80,8 @@ class NotebookMeta(BaseModel):
             "description": self.description,
             "tags": self.tags,
             "sandbox": self.sandbox,
-            "requires_login": self.requires_login,
+            # The index lock badge: true for any restricted notebook.
+            "requires_login": self.requires_login or bool(self.groups),
             "mtime": self.mtime,
             "has_thumbnail": self.thumbnail_path is not None,
             "url": f"/apps/{self.slug}/",

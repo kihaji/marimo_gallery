@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import pytest
 
+from gallery.auth import cn_from_dn
 from gallery.config import settings
 from gallery.main import app
 
@@ -36,6 +37,15 @@ async def gallery(tmp_path, monkeypatch):
 @pytest.fixture
 def client(gallery):
     return gallery(TESTER)
+
+
+def join_group(dn: str, group: str) -> None:
+    """Provision dn (if needed) and add it to a group, creating the group."""
+    db = app.state.db
+    user = db.upsert_user(dn, cn_from_dn(dn))
+    existing = {g["name"]: g for g in db.list_groups()}
+    grp = existing.get(group) or db.create_group(group)
+    db.set_membership(user["id"], grp["id"], True)
 
 
 class StubRunner:
@@ -215,8 +225,18 @@ async def test_run_now_and_artifacts(client, tmp_path):
     assert (await client.get(f"/runs/cluster-lab/{run['id']}/report")).status_code == 404
 
 
+async def test_group_gated_notebook_schedules_hidden_from_non_members(gallery, client):
+    # csv-explorer is restricted to the analytics group; tester is not in it.
+    assert (await client.get("/schedules/csv-explorer")).status_code == 404
+    assert (await client.get("/api/schedules/csv-explorer")).status_code == 404
+    assert (
+        await client.post("/api/schedules/csv-explorer/run", json={"params": {}})
+    ).status_code == 404
+
+
 async def test_run_artifacts_require_identity(gallery, client, tmp_path):
     runner = stub_runner(tmp_path)
+    join_group(TESTER, "analytics")
     run = (await client.post("/api/schedules/csv-explorer/run", json={"params": {}})).json()
     run_dir = runner.run_dir("csv-explorer", run["id"])
     run_dir.mkdir(parents=True)

@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     app.state.db = db
+    app.state.known_dns = set()  # DNs already provisioned this process
     app.state.scheduler = scheduler
     app.state.settings = settings
     app.state.registry = registry

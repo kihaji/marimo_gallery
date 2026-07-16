@@ -48,7 +48,8 @@ class Settings(BaseSettings):
     # fixed identity for local development when the header is absent.
     dn_header: str = "x-user-dn"
     dev_user_dn: str | None = None
-    # Comma-separated DNs granted admin on first sight (group management UI).
+    # Semicolon-separated DNs granted admin on first sight (group management
+    # UI). Semicolons because DNs themselves contain commas.
     admin_dns: str = ""
 
 

@@ -12,7 +12,7 @@ from fastapi.responses import (
     Response,
 )
 
-from gallery.auth import MISSING_IDENTITY_HINT, cn_from_dn, current_user
+from gallery.auth import MISSING_IDENTITY_HINT, Identity, identify
 from gallery.manager import AppState
 from gallery.proxy import proxy_http, proxy_ws
 from gallery.registry import NotebookMeta
@@ -24,28 +24,39 @@ router = APIRouter()
 PROXY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
-def _authorized(meta: NotebookMeta, user: str | None) -> bool:
-    return not meta.requires_login or user is not None
+def _authorized(meta: NotebookMeta, ident: Identity | None) -> bool:
+    if meta.groups:
+        return ident is not None and (ident.is_admin or bool(ident.groups.intersection(meta.groups)))
+    return not meta.requires_login or ident is not None
 
 
-def _visible_notebooks(request: Request, user: str | None) -> list[dict]:
+def _denied(ident: Identity | None) -> Response:
+    """401 with a hint when there is no identity at all; 404 when the user is
+    authenticated but not in an allowed group (don't reveal the notebook)."""
+    if ident is None:
+        return Response(MISSING_IDENTITY_HINT, status_code=401)
+    return Response("unknown notebook", status_code=404)
+
+
+def _visible_notebooks(request: Request, ident: Identity | None) -> list[dict]:
     return [
         m.summary()
         for m in request.app.state.registry.notebooks.values()
-        if _authorized(m, user)
+        if _authorized(m, ident)
     ]
 
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    user = current_user(request)
+    ident = identify(request)
     return request.app.state.templates.TemplateResponse(
         request,
         "index.html",
         {
-            "notebooks_json": json.dumps(_visible_notebooks(request, user)),
-            "user": user,
-            "user_name": cn_from_dn(user) if user else None,
+            "notebooks_json": json.dumps(_visible_notebooks(request, ident)),
+            "user": ident.dn if ident else None,
+            "user_name": ident.name if ident else None,
+            "is_admin": ident.is_admin if ident else False,
         },
     )
 
@@ -55,8 +66,10 @@ async def api_app_status(request: Request, slug: str):
     app = request.app.state.manager.get(slug)
     if app is None:
         return JSONResponse({"error": "unknown notebook"}, status_code=404)
-    if not _authorized(app.meta, current_user(request)):
-        return JSONResponse({"error": "login required"}, status_code=401)
+    ident = identify(request)
+    if not _authorized(app.meta, ident):
+        code = 401 if ident is None else 404
+        return JSONResponse({"error": "login required"}, status_code=code)
     return {"state": app.state.value, "error": app.start_error}
 
 
@@ -65,8 +78,9 @@ async def thumbnail(request: Request, slug: str):
     meta = request.app.state.registry.notebooks.get(slug)
     if meta is None or meta.thumbnail_path is None:
         return Response(status_code=404)
-    if not _authorized(meta, current_user(request)):
-        return Response(status_code=401)
+    ident = identify(request)
+    if not _authorized(meta, ident):
+        return Response(status_code=401 if ident is None else 404)
     return FileResponse(meta.thumbnail_path)
 
 
@@ -97,8 +111,9 @@ async def app_http(request: Request, slug: str, path: str):
         and path in ("", "/")
         and "text/html" in request.headers.get("accept", "")
     )
-    if not _authorized(app.meta, current_user(request)):
-        return Response(MISSING_IDENTITY_HINT, status_code=401)
+    ident = identify(request)
+    if not _authorized(app.meta, ident):
+        return _denied(ident)
 
     if app.state != AppState.RUNNING:
         if is_page_load:
@@ -131,7 +146,7 @@ async def app_ws(websocket: WebSocket, slug: str, path: str):
     if app is None:
         await websocket.close(code=4404)
         return
-    if not _authorized(app.meta, current_user(websocket)):
+    if not _authorized(app.meta, identify(websocket)):
         await websocket.close(code=4401)
         return
     if app.state != AppState.RUNNING:
